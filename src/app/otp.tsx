@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View, } from "react-native";
+import { API_BASE_URL } from "../config/api";
 
 
 export default function OtpScreen() {
@@ -51,7 +52,7 @@ export default function OtpScreen() {
         setIsLoading(true);
 
         try {
-            const response = await fetch("https://retainer-preamble-lifting.ngrok-free.dev/auth/verify-otp", {
+            const response = await fetch(`${API_BASE_URL}/auth/verify-otp`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -84,8 +85,7 @@ export default function OtpScreen() {
     setIsResending(true);
 
     try {
-        const response = await fetch(
-            "https://retainer-preamble-lifting.ngrok-free.dev/auth/resend-otp",
+        const response = await fetch(`${API_BASE_URL}/auth/resend-otp`,
             {
                 method: "POST",
                 headers: {

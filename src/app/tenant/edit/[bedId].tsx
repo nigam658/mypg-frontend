@@ -580,6 +580,7 @@ export default function EditTenant() {
                             aadhaarError && styles.inputWithError,
                         ]}
                         value={aadhaar}
+                        placeholder="XXXX-XXXX-XXXX"
                         onChangeText={(text) => {
                             setAadhaar(formatAadhaar(text));
                             setAadhaarError("");

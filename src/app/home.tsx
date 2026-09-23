@@ -1,259 +1,652 @@
-import { router } from "expo-router";
-import { useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, } from "react-native";
+import { router, useFocusEffect } from "expo-router";
+import * as SecureStore from "expo-secure-store";
+import { useCallback, useState } from "react";
+import {
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { API_BASE_URL } from "../config/api";
 
 import PropertyCard from "../components/PropertyCard";
+import { authenticatedFetch } from "../services/auth";
 import { getMyBuildings } from "../services/building";
 
 
 type Property = {
-  id: number;
-  name: string;
-  address: string;
-  totalRooms: number;
+    id: number;
+    name: string;
+    address: string;
+    totalRooms: number;
 };
 
+
+type Owner = {
+    owner_id: number;
+    name: string;
+};
+
+
+// =========================
+// Dynamic Greeting
+// =========================
+const getGreeting = () => {
+    const hour = new Date().getHours();
+
+    if (hour >= 4 && hour < 12) {
+        return "Good morning";
+    }
+
+    if (hour >= 12 && hour < 18) {
+        return "Good afternoon";
+    }
+
+    if (hour >= 18) {
+        return "Good evening";
+    }
+
+    return "Good night";
+};
+
+
 export default function HomeScreen() {
+
+    // =========================
+    // State
+    // =========================
     const [roomNumber, setRoomNumber] = useState("");
     const [properties, setProperties] = useState<Property[]>([]);
+    const [greeting] = useState(getGreeting());
+    const [owner, setOwner] = useState<Owner | null>(null);
+    const [showProfile, setShowProfile] = useState(false);
 
+    // =========================
+    // Logout
+    // =========================
+
+    const handleLogout = async () => {
+        await SecureStore.deleteItemAsync("access_token");
+        await SecureStore.deleteItemAsync("refresh_token");
+
+        router.replace("/login");
+    };
+
+
+    // =========================
+    // Load Buildings
+    // =========================
     const loadBuildings = async () => {
+
         const data = await getMyBuildings();
 
         setProperties(data.buildings);
-        };
+    };
 
-    useEffect(() => {
-    loadBuildings();
-    }, []);
-    
-    return (
-    <View style={styles.container}>
 
-        {/* Header */}
-        <View style={styles.header}>
+    // =========================
+    // Load Owner Information
+    // =========================
+    const loadOwner = async () => {
 
-        <View>
-            <Text style={styles.greeting}>Good evening</Text>
-            <Text style={styles.title}>Your PG</Text>
-        </View>
+        const response = await authenticatedFetch(
+            `${API_BASE_URL}/auth/me`
+        );
 
-        <View style={styles.profile}>
-            <Text style={styles.profileText}>N</Text>
-        </View>
+        if (!response.ok) {  
+            throw new Error("Failed to load owner");
+        }
 
-        </View>
+        const data = await response.json();
 
-        {/* Search */}
-        <View style={styles.searchBox}>
+        setOwner(data);
+    };
 
-            <Text style={styles.searchIcon}>⌕</Text>
 
-            <TextInput
-                style={styles.searchInput}
-                placeholder="Search"
-                placeholderTextColor="#888888"
-                value={roomNumber}
-                onChangeText={setRoomNumber}
-            />
-
-            <Pressable style={styles.searchButton}>
-                <Text style={styles.searchButtonText}>→</Text>
-            </Pressable>
-
-        </View>
-
-        
-        {properties.length > 0 ? (
-        <>
-            <Text style={styles.buildingsTitle}>
-                Your Buildings
-            </Text>
-
-            <ScrollView style={styles.cardsContainer}>
-                {properties.map((property) => (
-                    <PropertyCard
-                        key={property.id}
-                        pgId={`PG-${property.id}`}
-                        name={property.name}
-                        address={property.address}
-                        totalRooms={property.totalRooms}
-                        onPress={() => {
-                            router.push({
-                                pathname: "/building/[buildingId]",
-                                params: {
-                                    buildingId: property.id.toString(),
-                                },
-                            });
-                        }}
-                    />
-                ))}
-            </ScrollView>
-
-        </>
-        ) : (
-            <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>
-                    No PGs yet
-                </Text> 
-
-                <Text style={styles.emptyMessage}>
-                    Create your first PG to get started.
-                </Text>
-
-                <Pressable 
-                    style={styles.createButton}
-                    onPress={() => {
-                        router.push({
-                            pathname: "/create-pg",
-                        });
-                    }}
-                >
-                    <Text style={styles.createButtonText}>
-                        + Create PG
-                    </Text>
-                </Pressable>
-            </View>
-        )}
-
-    </View>
+    // =========================
+    // Reload home data whenever the screen comes into focus
+    // =========================
+    useFocusEffect(
+        useCallback(() => {
+            loadBuildings();
+            loadOwner();
+        }, [])
     );
 
-    }
+
+    return (
+
+        <SafeAreaView
+            edges={["top"]}
+            style={{ flex: 1, backgroundColor: "#F1F3F5" }}
+        >
+            <View style={styles.container}>
+
+                {/* =========================
+                    Header
+                ========================= */}
+                <View style={styles.header}>
+
+                    {/* Left Side */}
+                    <View style={styles.headerLeft}>
+
+                        <Pressable
+                            style={styles.logoutButton}
+                            onPress={handleLogout}
+                        >
+                            <Text style={styles.logoutButtonText}>
+                                Logout
+                            </Text>
+                        </Pressable>
+
+                        <View>
+                            <Text style={styles.greeting}>
+                                {greeting},{" "}
+                                <Text style={styles.greetingName}>
+                                    {owner?.name?.trim().split(" ")[0] || ""}
+                                </Text>
+                            </Text>
+
+                            <Text style={styles.title}>
+                                MY PG
+                            </Text>
+                        </View>
+
+                    </View>
+
+                    {/* Profile */}
+                    <Pressable
+                        style={styles.profile}
+                        onPress={() => setShowProfile(true)}
+                    >
+                        <Text style={styles.profileText}>
+                            {owner?.name?.trim().charAt(0).toUpperCase() || "?"}
+                        </Text>
+                    </Pressable>
+
+                </View>
+
+
+                {/* =========================
+                    Search
+                ========================= */}
+                <View style={styles.searchBox}>
+
+                    <Text style={styles.searchIcon}>
+                        ⌕
+                    </Text>
+
+
+                    <TextInput
+                        style={styles.searchInput}
+                        placeholder="Search room or tenant..."
+                        placeholderTextColor="#9A9EA5"
+                        value={roomNumber}
+                        onChangeText={setRoomNumber}
+                    />
+
+
+                    <Pressable style={styles.searchButton}>
+
+                        <Text style={styles.searchButtonText}>
+                            →
+                        </Text>
+
+                    </Pressable>
+
+                </View>
+
+
+                {/* =========================
+                    Buildings
+                ========================= */}
+                {properties.length > 0 ? (
+
+                    <>
+
+                        {/* Buildings Heading */}
+                        <View style={styles.sectionHeader}>
+
+                            <Text style={styles.buildingsTitle}>
+                                Your Buildings
+                            </Text>
+
+
+                            <View style={styles.buildingCount}>
+
+                                <Text style={styles.buildingCountText}>
+                                    {properties.length}
+                                </Text>
+
+                            </View>
+
+                        </View>
+
+
+                        {/* Building Cards */}
+                        <ScrollView
+                            style={styles.cardsContainer}
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={styles.cardsContent}
+                        >
+
+                            {properties.map((property) => (
+
+                                <PropertyCard
+                                    key={property.id}
+                                    pgId={`PG-${property.id}`}
+                                    name={property.name}
+                                    address={property.address}
+                                    totalRooms={property.totalRooms}
+
+                                    onPress={() => {
+
+                                        router.push({
+                                            pathname: "/building/[buildingId]",
+
+                                            params: {
+                                                buildingId: property.id.toString(),
+                                                buildingName: property.name,
+                                            },
+                                        });
+
+                                    }}
+                                />
+
+                            ))}
+
+                        </ScrollView>
+
+                    </>
+
+                ) : (
+
+                    /* =========================
+                    Empty State
+                    ========================= */
+                    <View style={styles.emptyState}>
+
+                        <Text style={styles.emptyTitle}>
+                            No PGs yet
+                        </Text>
+
+
+                        <Text style={styles.emptyMessage}>
+                            Create your first PG to get started.
+                        </Text>
+
+                    </View>
+
+                )}
+
+
+                {/* =========================
+                    Floating Create PG Button
+                ========================= */}
+                <Pressable
+                    style={styles.floatingCreateButton}
+                    onPress={() => {
+                        router.push("/create-pg");
+                    }}
+                >
+
+                    <Text style={styles.floatingCreateButtonText}>
+                        + Create PG
+                    </Text>
+
+                </Pressable>
+
+
+                {/* =========================
+                    Profile Preview Modal
+                ========================= */}
+                <Modal
+                    visible={showProfile}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setShowProfile(false)}
+                >
+
+                    <Pressable
+                        style={styles.profileOverlay}
+                        onPress={() => setShowProfile(false)}
+                    >
+
+                        <View style={styles.largeProfile}>
+
+                            <Text style={styles.largeProfileText}>
+                                {owner?.name?.trim().charAt(0).toUpperCase() || "?"}
+                            </Text>
+
+                        </View>
+
+                    </Pressable>
+
+                </Modal>
+
+            </View>
+        </SafeAreaView>
+    );
+}
+
 
 const styles = StyleSheet.create({
+
+    // =========================
+    // Main Container
+    // =========================
     container: {
         flex: 1,
         backgroundColor: "#F1F3F5",
+        paddingHorizontal: 10,
     },
 
+
+    // =========================
+    // Header
+    // =========================
     header: {
         flexDirection: "row",
         justifyContent: "space-between",
-        alignItems: "center",
-        marginTop: 30,
+        alignItems: "flex-start",
+        marginTop: 16,
         marginBottom: 36,
     },
 
-    greeting: {
-        fontSize: 14,
-        fontWeight: "500",
-        color: "#777777",
-        marginBottom: 4,
+    headerLeft: {
+        flexDirection: "column",
+        alignItems: "flex-start",
     },
 
+    logoutButton: {
+        marginBottom: 25,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        borderRadius: 8,
+        backgroundColor: "#E2E6EA",
+    },
+
+    logoutButtonText: {
+        fontSize: 12,
+        fontWeight: "600",
+        color: "#071426",
+    },
+
+
+    // =========================
+    // Greeting
+    // =========================
+    greeting: {
+        fontSize: 14,
+        fontWeight: "400",
+        color: "#7B8088",
+        marginBottom: 6,
+    },
+
+
+    greetingName: {
+        fontWeight: "600",
+        color: "#7B8088",
+    },
+
+
+    // =========================
+    // Page Title
+    // =========================
     title: {
         fontSize: 32,
         fontWeight: "700",
         color: "#071426",
+        letterSpacing: -0.5,
     },
 
+
+    // =========================
+    // Small Profile
+    // =========================
     profile: {
-        width: 42,
-        height: 42,
-        borderRadius: 26,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        marginTop:8,
         backgroundColor: "#071426",
+
         justifyContent: "center",
         alignItems: "center",
     },
+
 
     profileText: {
         color: "#FFFFFF",
-        fontSize: 17,
-        fontWeight: "600",
-    },
-
-    searchBox: {
-        marginTop:5,
-        height: 46,
-        backgroundColor: "#FFFFFF",
-        borderRadius: 18,
-        paddingLeft: 16,
-        paddingRight: 6,
-        flexDirection: "row",
-        alignItems: "center",
-    },
-
-    searchLabel: {
-        fontSize: 11,
-        fontWeight: "600",
-        color: "#888888",
-        letterSpacing: 0.8,
-        marginBottom: 6,
-    },
-
-    searchInput: {
-        flex: 1,
-        padding: 0,
         fontSize: 16,
-        color: "#071426",
-    },
-    
-    searchContent: {
-        flex: 1,
+        fontWeight: "600",
     },
 
-    searchButton: {
-        width: 47,
-        height: 46,
-        borderRadius: 16,
-        backgroundColor: "#071426",
+
+    // =========================
+    // Profile Overlay
+    // =========================
+    profileOverlay: {
+        flex: 1,
+
+        backgroundColor: "rgba(0, 0, 0, 0.50)",
+
         justifyContent: "center",
         alignItems: "center",
     },
 
+
+    // =========================
+    // Large Profile
+    // =========================
+    largeProfile: {
+        width: 200,
+        height: 200,
+        borderRadius: 100,
+
+        backgroundColor: "#071426",
+
+        justifyContent: "center",
+        alignItems: "center",
+    },
+
+
+    largeProfileText: {
+        color: "#FFFFFF",
+        fontSize: 72,
+        fontWeight: "600",
+    },
+
+
+    // =========================
+    // Search Box
+    // =========================
+    searchBox: {
+        height: 50,
+
+        backgroundColor: "#FFFFFF",
+
+        borderRadius: 16,
+
+        paddingLeft: 15,
+        paddingRight: 5,
+
+        flexDirection: "row",
+        alignItems: "center",
+
+        borderWidth: 1,
+        borderColor: "#E2E5E9",
+    },
+
+
+    searchIcon: {
+        fontSize: 23,
+        color: "#071426",
+
+        marginRight: 9,
+    },
+
+
+    searchInput: {
+        flex: 1,
+
+        padding: 0,
+
+        fontSize: 15,
+        color: "#071426",
+    },
+
+
+    searchButton: {
+        width: 42,
+        height: 42,
+
+        borderRadius: 13,
+
+        backgroundColor: "#071426",
+
+        justifyContent: "center",
+        alignItems: "center",
+    },
+
+
     searchButtonText: {
         color: "#FFFFFF",
-        fontSize: 22,
+        fontSize: 21,
         fontWeight: "500",
     },
 
-    searchIcon: {
-        fontSize: 22,
-        color: "#071426",
-        marginRight: 10,
+
+    // =========================
+    // Buildings Section
+    // =========================
+    sectionHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+
+        marginTop: 28,
+        marginBottom: 16,
     },
-    
+
+
     buildingsTitle: {
         fontSize: 19,
         fontWeight: "700",
         color: "#071426",
-        marginTop: 30,
-        marginBottom: 16,
     },
 
+
+    // =========================
+    // Building Count
+    // =========================
+    buildingCount: {
+        marginLeft: 8,
+
+        minWidth: 30,
+        height: 28,
+
+        paddingHorizontal: 8,
+
+        borderRadius: 8,
+
+        backgroundColor: "#E2E6EA",
+
+        justifyContent: "center",
+        alignItems: "center",
+    },
+
+
+    buildingCountText: {
+        fontSize: 13,
+        fontWeight: "600",
+        color: "#071426",
+    },
+
+
+    // =========================
+    // Building Cards Container
+    // =========================
+    cardsContainer: {
+        flex: 1,
+    },
+
+
+    cardsContent: {
+        paddingBottom: 100,
+    },
+
+
+    // =========================
+    // Empty State
+    // =========================
     emptyState: {
         alignItems: "center",
+
         marginTop: 70,
+        paddingHorizontal: 20,
     },
+
 
     emptyTitle: {
         fontSize: 22,
         fontWeight: "700",
+
         color: "#071426",
+
         marginBottom: 8,
     },
 
+
     emptyMessage: {
         fontSize: 14,
+
         color: "#777777",
+
+        textAlign: "center",
+
         marginBottom: 22,
     },
 
-    createButton: {
+
+    // =========================
+    // Floating Create PG Button
+    // =========================
+    floatingCreateButton: {
+        position: "absolute",
+
+        right: 20,
+        bottom: 24,
+
         backgroundColor: "#071426",
-        paddingHorizontal: 22,
+
+        paddingHorizontal: 18,
         paddingVertical: 13,
+
         borderRadius: 14,
+
+        elevation: 5,
+
+        shadowColor: "#000",
+
+        shadowOffset: {
+            width: 0,
+            height: 3,
+        },
+
+        shadowOpacity: 0.18,
+        shadowRadius: 6,
     },
 
-    createButtonText: {
+
+    floatingCreateButtonText: {
         color: "#FFFFFF",
-        fontSize: 15,
+
+        fontSize: 14,
         fontWeight: "600",
     },
 
-    cardsContainer: {
-        flex: 1,
-    },
 });

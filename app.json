@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mypg-frontend",
+    "name": "NGPG",
     "slug": "mypg-frontend",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,11 +11,11 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.nigam.mypg",
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/images/icon.png"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -34,11 +34,19 @@
         }
       ],
       "expo-secure-store",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "2a9dbd0e-7779-496a-ab14-8fd8513a4fe8"
+      }
     }
   }
 }

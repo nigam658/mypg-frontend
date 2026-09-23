@@ -1,4 +1,7 @@
 import * as SecureStore from "expo-secure-store";
+import { API_BASE_URL } from "../config/api";
+
+
 
 // Gets a new access token using the stored refresh token
 export const refreshAccessToken = async () => {
@@ -17,8 +20,7 @@ export const refreshAccessToken = async () => {
     try {
 
         // Ask the backend for a new access token
-        response = await fetch(
-            "https://retainer-preamble-lifting.ngrok-free.dev/auth/refresh",
+        response = await fetch(`${API_BASE_URL}/auth/refresh`, 
             {
                 method: "POST",
                 headers: {
@@ -62,6 +64,55 @@ export const refreshAccessToken = async () => {
 };
 
 
+
+// Checks whether the current access token is still valid
+export const checkAccessToken = async () => {
+
+    // Get the current access token from SecureStore
+    const accessToken =
+        await SecureStore.getItemAsync("access_token");
+
+    // No access token means the user is not authenticated
+    if (!accessToken) {
+        throw new Error("ACCESS_TOKEN_MISSING");
+    }
+
+    let response: Response;
+
+    try {
+
+        // Ask the backend to verify the current access token
+       response = await fetch(`${API_BASE_URL}/auth/me`, 
+            {
+                method: "GET",
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
+            }
+        );
+
+    } catch (error) {
+
+        // Server could not be reached
+        throw new Error("NETWORK_ERROR");
+    }
+
+    // Access token is expired or invalid
+    if (response.status === 401) {
+        throw new Error("ACCESS_TOKEN_EXPIRED");
+    }
+
+    // Some other server error
+    if (!response.ok) {
+        throw new Error("ACCESS_TOKEN_CHECK_FAILED");
+    }
+
+    // Access token is valid
+    return true;
+};
+
+
+
 // Makes requests to APIs that require authentication
 export const authenticatedFetch = async (
     url: string,
@@ -74,6 +125,7 @@ export const authenticatedFetch = async (
 
     // Cannot make an authenticated request without an access token
     if (!accessToken) {
+        console.log("NO ACCESS TOKEN - REQUEST BLOCKED");
         throw new Error("Access token not found");
     }
 

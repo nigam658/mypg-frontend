@@ -1,10 +1,11 @@
+import { API_BASE_URL } from "../config/api";
 import { authenticatedFetch } from "./auth";
 
-const API_URL = "https://retainer-preamble-lifting.ngrok-free.dev";
+
 
 export const getBedsByRoomId = async (roomId: number) => {
     const response = await authenticatedFetch(
-        `${API_URL}/beds/room/${roomId}`
+        `${API_BASE_URL}/beds/room/${roomId}`
     );
 
     if (!response.ok) {
@@ -18,7 +19,7 @@ export const getBedsByRoomId = async (roomId: number) => {
 
 export const deleteBed = async (bedId: number) => {
     const response = await authenticatedFetch(
-        `${API_URL}/beds/${bedId}`,
+        `${API_BASE_URL}/beds/${bedId}`,
         {
             method: "DELETE",
         }
@@ -29,6 +30,26 @@ export const deleteBed = async (bedId: number) => {
 
     if (!response.ok || data.exists === false) {
         throw new Error(data.message || "Failed to delete bed.");
+    }
+
+    return data;
+};
+
+
+export const addBed = async (roomId: number) => {
+   const response = await authenticatedFetch(
+        `${API_BASE_URL}/beds/rooms/${roomId}`,
+        {
+            method: "POST",
+        }
+    );
+
+    const data = await response.json();
+
+    console.log("Add bed API response:", data);
+
+    if (!response.ok || data.exists === false) {
+        throw new Error(data.message || "Failed to add bed.");
     }
 
     return data;

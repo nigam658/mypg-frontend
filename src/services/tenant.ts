@@ -1,12 +1,11 @@
+import { API_BASE_URL } from "../config/api";
 import { authenticatedFetch } from "./auth";
 
-const API_URL =
-  "https://retainer-preamble-lifting.ngrok-free.dev";
 
 // get tenant informations   
 export const getTenantByBedId = async (bedId: number) => {
     const response = await authenticatedFetch(
-        `${API_URL}/tenants/${bedId}/tenant`
+        `${API_BASE_URL}/tenants/${bedId}/tenant`
     );
 
     if (!response.ok) {
@@ -35,7 +34,7 @@ export const updateTenant = async (
     }
 ) => {
     const response = await authenticatedFetch(
-        `${API_URL}/tenants/${tenantId}/edit`,
+        `${API_BASE_URL}/tenants/${tenantId}/edit`,
         {
             method: "PUT",
             headers: {
@@ -66,7 +65,7 @@ export const updateTenant = async (
 // remove tenant
 export const removeTenant = async (tenantId: number) => {
     const response = await authenticatedFetch(
-        `${API_URL}/tenants/${tenantId}`,
+        `${API_BASE_URL}/tenants/${tenantId}`,
         {
             method: "DELETE",
         }
@@ -106,7 +105,7 @@ export const addTenant = async (
     }
 ) => {
     const response = await authenticatedFetch(
-        `${API_URL}/tenants/beds/${bedId}/tenant`,
+        `${API_BASE_URL}/tenants/beds/${bedId}/tenant`,
         {
             method: "POST",
             headers: {

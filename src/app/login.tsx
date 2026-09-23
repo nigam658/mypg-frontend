@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useState } from "react";
@@ -11,8 +12,10 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View,
+    View
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { API_BASE_URL } from "../config/api";
 
 
 export default function LoginScreen() {
@@ -24,8 +27,16 @@ export default function LoginScreen() {
 
     const [emailError, setEmailError] = useState("");
     const [passwordError, setPasswordError] = useState("");
+    const [showPassword, setShowPassword] = useState(false);
 
     const [isLoading, setIsLoading] = useState(false);
+    const logoutForTesting = async () => {
+        await SecureStore.deleteItemAsync("access_token");
+        await SecureStore.deleteItemAsync("refresh_token");
+
+        console.log("Tokens deleted");
+    };
+    const insets = useSafeAreaInsets();
 
     const handleLogin = async () => {
 
@@ -58,7 +69,7 @@ export default function LoginScreen() {
 
         try {
             const response = await fetch(
-                "https://retainer-preamble-lifting.ngrok-free.dev/auth/login",
+                `${API_BASE_URL}/auth/login`,
                 {
                     method: "POST",
                     headers: {
@@ -146,19 +157,33 @@ export default function LoginScreen() {
                                 </Text>
                             )}
 
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Password"
-                                placeholderTextColor="#64748B"
-                                value={password}
-                                secureTextEntry
-                                autoCapitalize="none"
-                                autoCorrect={false}
-                                onChangeText={(text) => {
-                                    setPassword(text);
-                                    setPasswordError("");
-                                }}
-                            />
+                            <View style={styles.passwordContainer}>
+                                <TextInput
+                                    style={styles.passwordInput}
+                                    placeholder="Password"
+                                    placeholderTextColor="#64748B"
+                                    value={password}
+                                    secureTextEntry={!showPassword}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    onChangeText={(text) => {
+                                        setPassword(text);
+                                        setPasswordError("");
+                                    }}
+                                />
+
+                                <TouchableOpacity
+                                    style={styles.eyeButton}
+                                    onPress={() => setShowPassword(!showPassword)}
+                                    accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                                >
+                                    <Ionicons
+                                        name={showPassword ? "eye-off-outline" : "eye-outline"}
+                                        size={22}
+                                        color="#64748B"
+                                    />
+                                </TouchableOpacity>
+                            </View>
 
                             {passwordError !== "" && (
                                 <Text style={styles.error}>
@@ -182,7 +207,7 @@ export default function LoginScreen() {
 
                             <TouchableOpacity
                                 style={styles.signupLink}
-                                onPress={() => router.push("/")}
+                                onPress={() => router.push("/signup")}
                             >
                                 <Text style={styles.signupNormalText}>
                                     Don't have an account?{" "}
@@ -257,6 +282,33 @@ const styles = StyleSheet.create({
         marginBottom: 12,
         fontSize: 16,
         color: "#1E293B",
+    },
+
+    passwordContainer: {
+        width: "100%",
+        height: 52,
+        flexDirection: "row",
+        alignItems: "center",
+        borderColor: "#D9DEE7",
+        borderWidth: 1,
+        borderRadius: 14,
+        backgroundColor: "#F8FAFC",
+        marginBottom: 12,
+    },
+
+    passwordInput: {
+        flex: 1,
+        height: "100%",
+        paddingHorizontal: 12,
+        fontSize: 16,
+        color: "#1E293B",
+    },
+
+    eyeButton: {
+        height: "100%",
+        paddingHorizontal: 14,
+        justifyContent: "center",
+        alignItems: "center",
     },
 
     error: {

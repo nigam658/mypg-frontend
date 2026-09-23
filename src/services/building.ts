@@ -1,13 +1,11 @@
+import { API_BASE_URL } from "../config/api";
 import { authenticatedFetch } from "./auth";
 
-// buildings fetch API for home page 
-const API_URL =
-  "https://retainer-preamble-lifting.ngrok-free.dev";
 
 export const getMyBuildings = async () => {
 
   const response = await authenticatedFetch(
-    `${API_URL}/buildings/my-buildings`
+    `${API_BASE_URL}/buildings/my-buildings`
   );
 
   if (!response.ok) {
@@ -30,7 +28,7 @@ export const getMyBuildings = async () => {
 // floor fetch API 
 export const getFloorsByBuildingId = async (buildingId: number) => {
   const response = await authenticatedFetch(
-    `${API_URL}/floors/building/${buildingId}`
+    `${API_BASE_URL}/floors/building/${buildingId}`
   );
 
   if (!response.ok) {
@@ -39,16 +37,67 @@ export const getFloorsByBuildingId = async (buildingId: number) => {
 
   const data = await response.json();
 
+  console.log(
+    "CURRENT FLOORS:",
+    JSON.stringify(data, null, 2)
+  );
+
   return data.map((floor: any) => ({
     id: floor.floor_id,
     floorNumber: floor.floor_number,
   }));
 };
 
+// Add floor
+export const addFloor = async (
+  buildingId: number,
+  floorNumber: number
+) => {
+  const response = await authenticatedFetch(
+    `${API_BASE_URL}/floors/${buildingId}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        floor_number: floorNumber,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json();
+
+    throw new Error(
+      errorData.detail || "Failed to add floor"
+    );
+  }
+
+  return await response.json();
+};
+
+// Delete floor
+export const deleteFloor = async (floorId: number) => {
+  const response = await authenticatedFetch(
+    `${API_BASE_URL}/floors/${floorId}`,
+    {
+      method: "DELETE",
+    }
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json();
+
+    throw new Error(
+      errorData.detail || "Failed to delete floor"
+    );
+  }
+
+  return await response.json();
+};
+
 // room fetch API  
 export const getRoomsByFloorId = async (floorId: number) => {
   const response = await authenticatedFetch(
-    `${API_URL}/rooms/floor/${floorId}`
+    `${API_BASE_URL}/rooms/floor/${floorId}`
   );
 
   if (!response.ok) {
@@ -57,11 +106,42 @@ export const getRoomsByFloorId = async (floorId: number) => {
 
   const data = await response.json();
 
+  console.log(
+    "RAW ROOM API RESPONSE:",
+    JSON.stringify(data, null, 2)
+  );
+
   return data.map((room: any) => ({
     id: room.id,
     roomNumber: room.room_number,
     totalBeds: room.total_beds,
+    occupiedBeds: room.occupied_beds,
+    unpaidTenants: room.unpaid_tenants,
   }));
+};
+
+export const addRoom = async (data: {
+  floor_id: number;
+  room_number: string;
+  number_of_beds: number;
+}) => {
+  const response = await authenticatedFetch(
+    `${API_BASE_URL}/rooms/AddRoom`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json();
+
+    throw new Error(
+      errorData.detail || "Failed to add room"
+    );
+  }
+
+  return await response.json();
 };
 
 
@@ -75,7 +155,7 @@ export const createPG = async (data: {
 }) => {
 
     const response = await authenticatedFetch(
-        "https://retainer-preamble-lifting.ngrok-free.dev/buildings/quick_building_setup",
+        `${API_BASE_URL}/buildings/quick_building_setup`,
         {
             method: "POST",
             body: JSON.stringify(data),
@@ -90,4 +170,24 @@ export const createPG = async (data: {
     }
 
     return await response.json();
+};
+
+// Delete a room
+export const deleteRoom = async (roomId: number) => {
+  const response = await authenticatedFetch(
+    `${API_BASE_URL}/rooms/${roomId}`,
+    {
+      method: "DELETE",
+    }
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json();
+
+    throw new Error(
+      errorData.detail || "Failed to delete room"
+    );
+  }
+
+  return await response.json();
 };
