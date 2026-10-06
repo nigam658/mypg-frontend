@@ -126,7 +126,6 @@ export default function SignupScreen() {
                 });
 
                 const data = await response.json();
-                console.log("3. Response data:", data);
 
                 if (response.ok) {
                     console.log("4. Signup successful");

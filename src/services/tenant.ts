@@ -52,7 +52,9 @@ export const updateTenant = async (
         );
     }
 
-    if (!result.exists) {
+    // Backend can return success: false for business validation errors,
+    // such as when the phone number is already used by another tenant.
+    if (result.success === false) {
         throw new Error(
             result.message || "Tenant could not be updated."
         );

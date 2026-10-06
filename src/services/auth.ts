@@ -99,12 +99,22 @@ export const checkAccessToken = async () => {
 
     // Access token is expired or invalid
     if (response.status === 401) {
+        // Delete only the expired access token.
+        // Keep the refresh token so we can get a new access token.
+        await SecureStore.deleteItemAsync("access_token");
         throw new Error("ACCESS_TOKEN_EXPIRED");
     }
 
     // Some other server error
     if (!response.ok) {
+        console.log("AUTH ME STATUS:", response.status);
+
+        const errorText = await response.text();
+
+        console.log("AUTH ME RESPONSE:", errorText);
+
         throw new Error("ACCESS_TOKEN_CHECK_FAILED");
+
     }
 
     // Access token is valid

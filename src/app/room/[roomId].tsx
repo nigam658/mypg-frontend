@@ -1,12 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    Animated,
     FlatList,
-    KeyboardAvoidingView, Linking, Modal,
+    Keyboard,
+    Linking,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -51,6 +54,7 @@ export default function RoomPage() {
 
     // Store all beds belonging to this room
     const [beds, setBeds] = useState<Bed[]>([]);
+    const [loadingBeds, setLoadingBeds] = useState(true);
     const [openMenuBedId, setOpenMenuBedId] = useState<number | null>(null);
     const [menuPosition, setMenuPosition] = useState({
         x: 0,
@@ -96,9 +100,76 @@ export default function RoomPage() {
     
     const [addingTenant, setAddingTenant] = useState(false);
     const [addingBed, setAddingBed] = useState(false);
+    // Stores the actual keyboard height when the keyboard is open.
+    // This value will be used only to create extra scrollable space.
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
 
+    // Controls the left-to-right shimmer animation
+    // used by the bed skeleton loading components.
+    const shimmer = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        const animation = Animated.loop(
+            Animated.timing(shimmer, {
+                toValue: 1,
+                duration: 1200,
+                useNativeDriver: true,
+            })
+        );
+
+        animation.start();
+
+        return () => {
+            animation.stop();
+        };
+    }, [shimmer]);
+
+    
+    const shimmerTranslate = shimmer.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-350, 350],
+    });
+
+    const shimmerOpacity = shimmer.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0.45, 1],
+    });
 
     const router = useRouter();
+
+    // Listen for the keyboard opening and closing.
+    // We use the keyboard height only to provide extra
+    // scrollable space inside the Add Tenant form.
+    useEffect(() => {
+        const showEvent =
+            Platform.OS === "android"
+                ? "keyboardDidShow"
+                : "keyboardWillShow";
+
+        const hideEvent =
+            Platform.OS === "android"
+                ? "keyboardDidHide"
+                : "keyboardWillHide";
+
+        const keyboardShowListener = Keyboard.addListener(
+            showEvent,
+            (event) => {
+                setKeyboardHeight(event.endCoordinates.height);
+            }
+        );
+
+        const keyboardHideListener = Keyboard.addListener(
+            hideEvent,
+            () => {
+                setKeyboardHeight(0);
+            }
+        );
+
+        return () => {
+            keyboardShowListener.remove();
+            keyboardHideListener.remove();
+        };
+    }, []);
 
     useEffect(() => {
         if (success) {
@@ -114,9 +185,10 @@ export default function RoomPage() {
 
     // defult room screen , showing bed informations
     const fetchBeds = async () => {
+        // Show bed skeleton while fetching bed data
+        setLoadingBeds(true);
 
         try {
-
             const data = await getBedsByRoomId(
                 Number(roomId)
             );
@@ -124,11 +196,10 @@ export default function RoomPage() {
             setBeds(
                 data.filter((bed: any) => bed.status !== "INACTIVE")
             );
-
         } catch (error) {
-
-            console.log("Failed to fetch beds:", error);
-
+        } finally {
+            // Hide skeleton after fetching is complete
+            setLoadingBeds(false);
         }
     };
     
@@ -148,7 +219,6 @@ export default function RoomPage() {
         try {
             const result = await deleteBed(bedId);
 
-            console.log("Delete bed response:", result);
 
             await fetchBeds();
 
@@ -294,719 +364,753 @@ export default function RoomPage() {
                 Beds
             </Text>
 
-            <FlatList
-                data={beds}
-                keyExtractor={(bed) => bed.bed_id.toString()}
-                renderItem={({ item }) => {
-                    const isOccupied = item.tenant !== null;
-                    console.log("FULL TENANT DATA:", item.tenant);
-                    let buttonRef: View | null = null;
-                    console.log("BED PAYMENT DATA:", {
-                        bed_id: item.bed_id,
-                        payment_status: item.payment_status,
-                        unpaid_months: item.unpaid_months,
-                    });
 
+            {loadingBeds ? (
+                <View style={styles.bedSkeletonContainer}>
+                    {[1, 2, 3, 4].map((item) => (
+                        <View
+                            key={item}
+                            style={styles.bedSkeletonCard}
+                        >
+                            {/* Moving light that travels from left to right */}
+                            <Animated.View
+                                style={[
+                                    styles.bedSkeletonShimmer,
+                                    {
+                                        transform: [
+                                            {
+                                                translateX: shimmerTranslate,
+                                            },
+                                        ],
+                                    },
+                                ]}
+                            />
 
-                    return (
-                        <View>
-                            <View style={styles.bedCard}>
+                            {/* Bed icon placeholder */}
+                            <View style={styles.bedSkeletonIcon} />
 
-                                {/* Bed information */}
-                                <Pressable
-                                    onPress={async () => {
+                            {/* Tenant information placeholders */}
+                            <View style={styles.bedSkeletonInfo}>
 
-                                        // If this bed is already open, close it
-                                        if (selectedBedId === item.bed_id) {
-                                            setSelectedBedId(null);
-                                            setTenantDetails(null);
-                                            return;
-                                        }
+                                {/* Tenant name */}
+                                <View style={styles.bedSkeletonName} />
 
-                                        // Select this bed
-                                        setSelectedBedId(item.bed_id);
+                                {/* Rent amount */}
+                                <View style={styles.bedSkeletonRent} />
 
-                                        // Available bed → no tenant API call
-                                        if (!item.tenant) {
-                                            setTenantDetails(null);
-                                            return;
-                                        }
-
-                                        try {
-                                            setTenantLoading(true);
-
-                                            const data = await getTenantByBedId(
-                                                item.bed_id
-                                            );
-
-                                            setTenantDetails(data);
-
-                                        } catch (error) {
-
-                                            console.log(
-                                                "Failed to fetch tenant information:",
-                                                error
-                                            );
-
-                                            setTenantDetails(null);
-
-                                        } finally {
-                                            setTenantLoading(false);
-                                        }
-                                    }}
-                                >
-                                    <View style={styles.bedInfoRow}>
-
-                                        <View style={styles.bedIconBox}>
-
-                                            <Text style={styles.bedIconNumber}>
-                                                Bed {item.bed_number}
-                                            </Text>
-
-                                            <Ionicons
-                                                name="bed-outline"
-                                                size={24}
-                                                color={
-                                                    item.status === "MAINTENANCE"
-                                                        ? "#D97706" // Maintenance: orange
-                                                        : item.tenant
-                                                            ? "#16A34A" // Occupied: green
-                                                            : "#2563EB" // Available: blue
-                                                }
-                                            />
-
-                                        </View>
-
-                                        <View style={styles.bedTextContainer}>
-
-                                            <View style={styles.statusRow}>
-                                                {item.tenant ? (
-                                                    <Text
-                                                        style={styles.tenantName}
-                                                        numberOfLines={1}
-                                                    >
-                                                        {item.tenant.full_name}
-                                                    </Text>
-                                                ) : item.status === "AVAILABLE" ? (
-                                                    <View style={styles.availableBadge}>
-                                                        <Text style={styles.availableBadgeText}>
-                                                            Available
-                                                        </Text>
-                                                    </View>
-                                                ) : (
-                                                    <Text style={styles.status}>
-                                                        {item.status}
-                                                    </Text>
-                                                )}
-                                            </View>
-
-                                            {item.rent !== null && (
-                                                <>
-                                                    <Text style={styles.rent}>
-                                                        ₹{item.rent.toLocaleString("en-IN")}
-                                                    </Text>
-
-                                                    {isOccupied && item.tenant?.check_in_date && (
-                                                        <Text style={styles.joiningDate}>
-                                                            {formatCheckInDate(item.tenant.check_in_date)}
-                                                        </Text>
-                                                    )}
-                                                </>
-                                            )}
-
-                                        </View>
-
-                                    </View>
-                                </Pressable>
-
-                                {/* Rent payment status — bottom-right */}
-                                {/* Paid status — compact, combined badge */}
-                                {item.payment_status === "PAID" && (
-                                    <View style={styles.paymentStatusRow}>
-                                        <Text style={styles.paidBadgeText}>Paid</Text>
-
-                                        <View style={styles.paidCheckCircle}>
-                                            <Ionicons
-                                                name="checkmark"
-                                                size={10}
-                                                color="#FFFFFF"
-                                            />
-                                        </View>
-                                    </View>
-                                )}
-                            
-                            
-                                {/* Unpaid rent — month count in red circle */}
-                                {item.payment_status === "UNPAID" &&
-                                    item.unpaid_months > 0 && (
-                                        <View style={styles.unpaidBadge}>
-                                            <Text style={styles.unpaidBadgeText}>Due</Text>
-
-                                            <View style={styles.unpaidCountCircle}>
-                                                <Text style={styles.unpaidCountText}>
-                                                    {item.unpaid_months}
-                                                </Text>
-                                            </View>
-                                        </View>
-                                    )}
-
-
-                                {/* Maintenance indicator */}
-                                {item.status === "MAINTENANCE" && (
-                                    <View style={styles.maintenanceIndicator}>
-                                        <Text style={styles.maintenanceText}>
-                                            🔧
-                                        </Text>
-                                    </View>
-                                )}
-
-                                {/* Call button */}
-                                {isOccupied && item.tenant?.phone && (
-                                    <Pressable
-                                        style={styles.callButton}
-                                        onPress={() => handleCallTenant(item.tenant!.phone)}
-                                    >
-                                        <Ionicons
-                                            name="call-outline"
-                                            size={17}
-                                            color="#16A34A"
-                                        />
-                                    </Pressable>
-                                )}
-
-                                
-                                {/* Menu button */}
-                                <Pressable
-                                    ref={(ref) => {
-                                        buttonRef = ref;
-                                    }}
-                                    style={styles.menuButton}
-                                    onPress={() => {
-                                        buttonRef?.measureInWindow(
-                                            (x, y, width, height) => {
-
-                                                console.log(
-                                                    "Button position:",
-                                                    x,
-                                                    y,
-                                                    width,
-                                                    height
-                                                );
-
-                                                setMenuPosition({
-                                                    x,
-                                                    y,
-                                                    height,
-                                                });
-                                            }
-                                        );
-
-                                        setOpenMenuBedId(item.bed_id);
-                                    }}
-                                >
-                                    <Text style={styles.menuDots}>
-                                        ⋮
-                                    </Text>
-                                </Pressable>
-
-
-                                {/* Menu */}
-                                <Modal
-                                    transparent={true}
-                                    visible={
-                                        openMenuBedId === item.bed_id
-                                    }
-                                    onRequestClose={() =>
-                                        setOpenMenuBedId(null)
-                                    }
-                                >
-                                    <View style={styles.modalContainer}>
-
-                                        <Pressable
-                                            style={styles.modalOverlay}
-                                            onPress={() =>
-                                                setOpenMenuBedId(null)
-                                            }
-                                        />
-
-                                        <View
-                                            style={[
-                                                styles.actionMenu,
-                                                {
-                                                    left:
-                                                        menuPosition.x - 120,
-                                                    top:
-                                                        menuPosition.y +
-                                                        menuPosition.height,
-                                                },
-                                            ]}
-                                        >
-
-                                            {isOccupied ? (
-                                                <>
-
-                                                    {/* UPDATE TENANT */}
-                                                    <Pressable
-                                                        style={styles.actionItem}
-                                                        onPress={() => {
-                                                            setOpenMenuBedId(null);
-
-                                                            router.push({
-                                                                pathname: "/tenant/edit/[bedId]",
-                                                                params: {
-                                                                    bedId: item.bed_id.toString(),
-                                                                    roomId: roomId.toString(),
-                                                                    roomNumber: roomNumber.toString(),
-                                                                },
-                                                            });
-                                                        }}
-                                                    >
-                                                        <Text
-                                                            style={
-                                                                styles.actionText
-                                                            }
-                                                        >
-                                                            Update Tenant
-                                                        </Text>
-                                                    </Pressable>
-
-
-                                                    {/* MOVE TENANT */}
-                                                    <Pressable
-                                                        style={styles.actionItem}
-                                                        onPress={() => {
-                                                            setOpenMenuBedId(null);
-
-                                                            console.log(
-                                                                "Move tenant:",
-                                                                item.tenant?.tenant_id
-                                                            );
-                                                        }}
-                                                    >
-                                                        <Text
-                                                            style={
-                                                                styles.actionText
-                                                            }
-                                                        >
-                                                            Move Tenant
-                                                        </Text>
-                                                    </Pressable>
-
-
-                                                    {/* REMOVE TENANT */}
-                                                    <Pressable
-                                                        style={styles.actionItem}
-                                                        onPress={() => {
-                                                            setOpenMenuBedId(null);
-
-                                                            if (item.tenant?.tenant_id) {
-                                                                setTenantToRemove(item.tenant.tenant_id);
-                                                                setRemoveTenantVisible(true);
-                                                            }
-                                                        }}
-                                                    >
-                                                        <Text style={styles.actionText}>
-                                                            Remove Tenant
-                                                        </Text>
-                                                    </Pressable>
-
-                                                </>
-                                            ) : (
-                                                <>
-
-                                                    {/* Add tenant */}
-                                                    <Pressable
-                                                        style={styles.actionItem}
-                                                        onPress={() => {
-                                                            setOpenMenuBedId(null);
-
-                                                            resetAddTenantForm();
-
-                                                            setTenantToAddBedId(item.bed_id);
-                                                            setTenantToAddBedNumber(item.bed_number);
-                                                            setAddTenantVisible(true);
-                                                        }}
-                                                    >
-                                                        <Text
-                                                            style={
-                                                                styles.actionText
-                                                            }
-                                                        >
-                                                            Add Tenant
-                                                        </Text>
-                                                    </Pressable>
-
-                                                    {!item.tenant && item.status !== "INACTIVE" && (
-                                                        <>
-                                                            {/* Delete bed */}
-                                                            <Pressable
-                                                                style={styles.actionItem}
-                                                                onPress={() => {
-                                                                    setOpenMenuBedId(null);
-
-                                                                    Alert.alert(
-                                                                        "Delete Bed",
-                                                                        "Are you sure you want to delete this bed?",
-                                                                        [
-                                                                            {
-                                                                                text: "Cancel",
-                                                                                style: "cancel",
-                                                                            },
-                                                                            {
-                                                                                text: "Delete",
-                                                                                style: "destructive",
-                                                                                onPress: () => handleDeleteBed(item.bed_id),
-                                                                            },
-                                                                        ]
-                                                                    );
-                                                                }}
-                                                            >
-                                                                <Text
-                                                                    style={
-                                                                        styles.actionText
-                                                                    }
-                                                                >
-                                                                    Delete Bed
-                                                                </Text>
-                                                            </Pressable>
-                                                        </>
-                                                    )}
-
-                                                </>
-                                            )}
-
-                                        </View>
-                                    </View>
-                                </Modal>
+                                {/* Check-in date */}
+                                <View style={styles.bedSkeletonDate} />
 
                             </View>
 
-
-                            {/* Expanded information card */}
-                            {selectedBedId === item.bed_id && (
-                                <View style={styles.tenantDetailsCard}>
-
-                                    {tenantLoading ? (
-                                        <ActivityIndicator size="small" />
-
-                                    ) : item.tenant && tenantDetails ? (
-
-                                        <>
-                                            {/* Tenant Header */}
-                                            <View style={styles.tenantPremiumHeader}>
-
-                                                <View style={styles.tenantAvatar}>
-                                                    <Text style={styles.tenantAvatarText}>
-                                                        {tenantDetails.tenant.full_name
-                                                            .split(" ")
-                                                            .map((name: string) => name[0])
-                                                            .slice(0, 2)
-                                                            .join("")
-                                                            .toUpperCase()}
-                                                    </Text>
-                                                </View>
-
-                                                <View style={styles.tenantHeaderInfo}>
-                                                    <Text
-                                                        style={styles.tenantHeaderName}
-                                                        numberOfLines={1}
-                                                    >
-                                                        {tenantDetails.tenant.full_name}
-                                                    </Text>
-
-                                                    <Text style={styles.tenantHeaderRole}>
-                                                        Tenant
-                                                    </Text>
-                                                </View>
-
-                                                <View style={styles.occupiedBadge}>
-                                                    <Text style={styles.occupiedBadgeText}>
-                                                        Occupied
-                                                    </Text>
-                                                </View>
-
-                                            </View>
-
-
-                                            {/* Information Content */}
-                                            <View style={styles.informationColumns}>
-
-                                                {/* LEFT — Tenant Information */}
-                                                <View style={styles.tenantColumn}>
-
-                                                    <View style={styles.columnHeader}>
-                                                        <Ionicons
-                                                            name="person-outline"
-                                                            size={16}
-                                                            color="#2563EB"
-                                                        />
-
-                                                        <Text style={styles.columnHeaderText}>
-                                                            Tenant Information
-                                                        </Text>
-                                                    </View>
-
-
-                                                    {/* Phone */}
-                                                    <View style={styles.infoRow}>
-
-                                                        <Ionicons
-                                                            name="call-outline"
-                                                            size={16}
-                                                            color="#64748B"
-                                                        />
-
-                                                        <Text style={styles.infoLabel}>
-                                                            Phone
-                                                        </Text>
-
-                                                        <Text
-                                                            style={styles.infoValue}
-                                                            numberOfLines={1}
-                                                        >
-                                                            {tenantDetails.tenant.phone}
-                                                        </Text>
-
-                                                    </View>
-
-
-                                                    {/* Gender */}
-                                                    <View style={styles.infoRow}>
-
-                                                        <Ionicons
-                                                            name="male-female-outline"
-                                                            size={16}
-                                                            color="#64748B"
-                                                        />
-
-                                                        <Text style={styles.infoLabel}>
-                                                            Gender
-                                                        </Text>
-
-                                                        <Text style={styles.infoValue}>
-                                                            {tenantDetails.tenant.gender || "-"}
-                                                        </Text>
-
-                                                    </View>
-
-
-                                                    {/* Address */}
-                                                    <View style={styles.infoRow}>
-
-                                                        <Ionicons
-                                                            name="location-outline"
-                                                            size={16}
-                                                            color="#64748B"
-                                                        />
-
-                                                        <Text style={styles.infoLabel}>
-                                                            Address
-                                                        </Text>
-
-                                                        <Text
-                                                            style={styles.infoValue}
-                                                            numberOfLines={2}
-                                                        >
-                                                            {tenantDetails.tenant.permanent_address || "-"}
-                                                        </Text>
-
-                                                    </View>
-
-
-                                                    {/* Emergency */}
-                                                    <View style={styles.infoRow}>
-
-                                                        <Ionicons
-                                                            name="call-outline"
-                                                            size={16}
-                                                            color="#64748B"
-                                                        />
-
-                                                        <Text style={styles.infoLabel}>
-                                                            Emergency
-                                                        </Text>
-
-                                                        <Text
-                                                            style={styles.infoValue}
-                                                            numberOfLines={1}
-                                                        >
-                                                            {tenantDetails.tenant.emergency_contact_phone || "-"}
-                                                        </Text>
-
-                                                    </View>
-
-
-                                                    {/* Aadhaar */}
-                                                    <View style={styles.infoRow}>
-
-                                                        <Ionicons
-                                                            name="card-outline"
-                                                            size={16}
-                                                            color="#64748B"
-                                                        />
-
-                                                        <Text style={styles.infoLabel}>
-                                                            Aadhaar
-                                                        </Text>
-
-                                                        <Text
-                                                            style={styles.infoValue}
-                                                            numberOfLines={1}
-                                                        >
-                                                            {tenantDetails.tenant.aadhaar_number || "-"}
-                                                        </Text>
-
-                                                    </View>
-
-                                                </View>
-
-
-                                                {/* VERTICAL DIVIDER */}
-                                                <View style={styles.columnDivider} />
-
-
-                                                {/* RIGHT — Allocation Information */}
-                                                <View style={styles.allocationColumn}>
-
-                                                    <View style={styles.columnHeader}>
-                                                        <Ionicons
-                                                            name="calendar-outline"
-                                                            size={16}
-                                                            color="#16A34A"
-                                                        />
-
-                                                        <Text
-                                                            style={[
-                                                                styles.columnHeaderText,
-                                                                styles.allocationHeaderText,
-                                                            ]}
-                                                        >
-                                                            Allocation Info
-                                                        </Text>
-                                                    </View>
-
-
-                                                    {/* Check-in Date */}
-                                                    <View style={styles.allocationInfoRow}>
-
-                                                        <Ionicons
-                                                            name="calendar-outline"
-                                                            size={16}
-                                                            color="#2563EB"
-                                                        />
-
-                                                        <View style={styles.allocationTextContainer}>
-                                                            <Text style={styles.allocationLabel}>
-                                                                Check-in Date
-                                                            </Text>
-
-                                                            <Text style={styles.allocationValue}>
-                                                                {tenantDetails.allocation.check_in_date}
-                                                            </Text>
-                                                        </View>
-
-                                                    </View>
-
-
-                                                    {/* Monthly Rent */}
-                                                    <View style={styles.allocationInfoRow}>
-
-                                                        <Ionicons
-                                                            name="cash-outline"
-                                                            size={16}
-                                                            color="#16A34A"
-                                                        />
-
-                                                        <View style={styles.allocationTextContainer}>
-                                                            <Text style={styles.allocationLabel}>
-                                                                Monthly Rent
-                                                            </Text>
-
-                                                            <Text style={styles.allocationValue}>
-                                                                ₹{tenantDetails.allocation.rent}
-                                                            </Text>
-                                                        </View>
-
-                                                    </View>
-
-
-                                                    {/* Security Deposit */}
-                                                    <View style={styles.allocationInfoRow}>
-
-                                                        <Ionicons
-                                                            name="shield-checkmark-outline"
-                                                            size={16}
-                                                            color="#7C3AED"
-                                                        />
-
-                                                        <View style={styles.allocationTextContainer}>
-                                                            <Text style={styles.allocationLabel}>
-                                                                Security Deposit
-                                                            </Text>
-
-                                                            <Text style={styles.allocationValue}>
-                                                                ₹{tenantDetails.allocation.security_deposit}
-                                                            </Text>
-                                                        </View>
-
-                                                    </View>
-
-                                                </View>
-
-                                            </View>
-
-                                        </>
-
-                                    ) : !item.tenant ? (
-
-                                        <View style={styles.availableBedContent}>
-
-                                            <View style={styles.availableBedHeader}>
-                                                <View style={styles.availableIconBox}>
-                                                    <Ionicons
-                                                        name="checkmark-circle-outline"
-                                                        size={20}
-                                                        color="#16A34A"
-                                                    />
-                                                </View>
-
-                                                <View style={styles.availableTextContainer}>
-                                                    <Text style={styles.availableTitle}>
-                                                        Bed is available
-                                                    </Text>
-
-                                                    <Text style={styles.availableSubtitle}>
-                                                        Add a tenant to this bed
-                                                    </Text>
-                                                </View>
-                                            </View>
-
-                                            <Pressable
-                                                style={styles.addTenantButton}
-                                                onPress={() => {
-                                                    resetAddTenantForm();
-                                                    setTenantToAddBedId(item.bed_id);
-                                                    setTenantToAddBedNumber(item.bed_number);
-                                                    setAddTenantVisible(true);
-                                                }}
-                                            >
-
-                                                <Text style={styles.addTenantButtonText}>
-                                                    Add Tenant
-                                                </Text>
-                                            </Pressable>
-
-                                        </View>
-
-                                    ) : null}
-
-                                </View>
-                            )}
+                            {/* Round call button placeholder */}
+                            <View style={styles.bedSkeletonRight} />
 
                         </View>
-                    );
-                }}
-            />   
+                    ))}
+                </View>
+            ) : (
+                <FlatList
+                    data={beds}
+                    keyExtractor={(bed) => bed.bed_id.toString()}
+                    renderItem={({ item }) => {
+                        const isOccupied = item.tenant !== null;
+                        
+                        let buttonRef: View | null = null;
+
+                        return (
+                            <View>
+                                <View style={styles.bedCard}>
+
+                                    {/* Bed information */}
+                                    <Pressable
+                                        onPress={async () => {
+
+                                            // If this bed is already open, close it
+                                            if (selectedBedId === item.bed_id) {
+                                                setSelectedBedId(null);
+                                                setTenantDetails(null);
+                                                return;
+                                            }
+
+                                            // Select this bed
+                                            setSelectedBedId(item.bed_id);
+
+                                            // Available bed → no tenant API call
+                                            if (!item.tenant) {
+                                                setTenantDetails(null);
+                                                return;
+                                            }
+
+                                            try {
+                                                setTenantLoading(true);
+
+                                                const data = await getTenantByBedId(
+                                                    item.bed_id
+                                                );
+
+                                                setTenantDetails(data);
+
+                                            } catch (error) {
+
+                                                console.error(
+                                                    "Failed to fetch tenant information:",
+                                                    error
+                                                );
+
+                                                setTenantDetails(null);
+
+                                            } finally {
+                                                setTenantLoading(false);
+                                            }
+                                        }}
+                                    >
+                                        <View style={styles.bedInfoRow}>
+
+                                            <View style={styles.bedIconBox}>
+
+                                                <Text style={styles.bedIconNumber}>
+                                                    Bed {item.bed_number}
+                                                </Text>
+
+                                                <Ionicons
+                                                    name="bed-outline"
+                                                    size={24}
+                                                    color={
+                                                        item.status === "MAINTENANCE"
+                                                            ? "#D97706" // Maintenance: orange
+                                                            : item.tenant
+                                                                ? "#16A34A" // Occupied: green
+                                                                : "#2563EB" // Available: blue
+                                                    }
+                                                />
+
+                                            </View>
+
+                                            <View style={styles.bedTextContainer}>
+
+                                                <View style={styles.statusRow}>
+                                                    {item.tenant ? (
+                                                        <Text
+                                                            style={styles.tenantName}
+                                                            numberOfLines={1}
+                                                        >
+                                                            {item.tenant.full_name}
+                                                        </Text>
+                                                    ) : item.status === "AVAILABLE" ? (
+                                                        <View style={styles.availableBadge}>
+                                                            <Text style={styles.availableBadgeText}>
+                                                                Available
+                                                            </Text>
+                                                        </View>
+                                                    ) : (
+                                                        <Text style={styles.status}>
+                                                            {item.status}
+                                                        </Text>
+                                                    )}
+                                                </View>
+
+                                                {item.rent !== null && (
+                                                    <>
+                                                        <Text style={styles.rent}>
+                                                            ₹{item.rent.toLocaleString("en-IN")}
+                                                        </Text>
+
+                                                        {isOccupied && item.tenant?.check_in_date && (
+                                                            <Text style={styles.joiningDate}>
+                                                                {formatCheckInDate(item.tenant.check_in_date)}
+                                                            </Text>
+                                                        )}
+                                                    </>
+                                                )}
+
+                                            </View>
+
+                                        </View>
+                                    </Pressable>
+
+                                    {/* Rent payment status — bottom-right */}
+                                    {/* Paid status — compact, combined badge */}
+                                    {item.payment_status === "PAID" && (
+                                        <View style={styles.paymentStatusRow}>
+                                            <Text style={styles.paidBadgeText}>Paid</Text>
+
+                                            <View style={styles.paidCheckCircle}>
+                                                <Ionicons
+                                                    name="checkmark"
+                                                    size={10}
+                                                    color="#FFFFFF"
+                                                />
+                                            </View>
+                                        </View>
+                                    )}
+                                
+                                
+                                    {/* Unpaid rent — month count in red circle */}
+                                    {item.payment_status === "UNPAID" &&
+                                        item.unpaid_months > 0 && (
+                                            <View style={styles.unpaidBadge}>
+                                                <Text style={styles.unpaidBadgeText}>Due</Text>
+
+                                                <View style={styles.unpaidCountCircle}>
+                                                    <Text style={styles.unpaidCountText}>
+                                                        {item.unpaid_months}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        )}
+
+
+                                    {/* Maintenance indicator */}
+                                    {item.status === "MAINTENANCE" && (
+                                        <View style={styles.maintenanceIndicator}>
+                                            <Text style={styles.maintenanceText}>
+                                                🔧
+                                            </Text>
+                                        </View>
+                                    )}
+
+                                    {/* Call button */}
+                                    {isOccupied && item.tenant?.phone && (
+                                        <Pressable
+                                            style={styles.callButton}
+                                            onPress={() => handleCallTenant(item.tenant!.phone)}
+                                        >
+                                            <Ionicons
+                                                name="call-outline"
+                                                size={17}
+                                                color="#16A34A"
+                                            />
+                                        </Pressable>
+                                    )}
+
+                                    
+                                    {/* Menu button */}
+                                    <Pressable
+                                        ref={(ref) => {
+                                            buttonRef = ref;
+                                        }}
+                                        style={styles.menuButton}
+                                        onPress={() => {
+                                            buttonRef?.measureInWindow(
+                                                (x, y, width, height) => {
+
+
+                                                    setMenuPosition({
+                                                        x,
+                                                        y,
+                                                        height,
+                                                    });
+                                                }
+                                            );
+
+                                            setOpenMenuBedId(item.bed_id);
+                                        }}
+                                    >
+                                        <Text style={styles.menuDots}>
+                                            ⋮
+                                        </Text>
+                                    </Pressable>
+
+
+                                    {/* Menu */}
+                                    <Modal
+                                        transparent={true}
+                                        visible={
+                                            openMenuBedId === item.bed_id
+                                        }
+                                        onRequestClose={() =>
+                                            setOpenMenuBedId(null)
+                                        }
+                                    >
+                                        <View style={styles.modalContainer}>
+
+                                            <Pressable
+                                                style={styles.modalOverlay}
+                                                onPress={() =>
+                                                    setOpenMenuBedId(null)
+                                                }
+                                            />
+
+                                            <View
+                                                style={[
+                                                    styles.actionMenu,
+                                                    {
+                                                        left:
+                                                            menuPosition.x - 120,
+                                                        top:
+                                                            menuPosition.y +
+                                                            menuPosition.height,
+                                                    },
+                                                ]}
+                                            >
+
+                                                {isOccupied ? (
+                                                    <>
+
+                                                        {/* UPDATE TENANT */}
+                                                        <Pressable
+                                                            style={styles.actionItem}
+                                                            onPress={() => {
+                                                                setOpenMenuBedId(null);
+
+                                                                router.push({
+                                                                    pathname: "/tenant/edit/[bedId]",
+                                                                    params: {
+                                                                        bedId: item.bed_id.toString(),
+                                                                        roomId: roomId.toString(),
+                                                                        roomNumber: roomNumber.toString(),
+                                                                    },
+                                                                });
+                                                            }}
+                                                        >
+                                                            <Text
+                                                                style={
+                                                                    styles.actionText
+                                                                }
+                                                            >
+                                                                Update Tenant
+                                                            </Text>
+                                                        </Pressable>
+
+
+                                                        {/* MOVE TENANT */}
+                                                        <Pressable
+                                                            style={styles.actionItem}
+                                                            onPress={() => {
+                                                                setOpenMenuBedId(null);
+
+                                                                console.log(
+                                                                    "Move tenant:",
+                                                                    item.tenant?.tenant_id
+                                                                );
+                                                            }}
+                                                        >
+                                                            <Text
+                                                                style={
+                                                                    styles.actionText
+                                                                }
+                                                            >
+                                                                Move Tenant
+                                                            </Text>
+                                                        </Pressable>
+
+
+                                                        {/* REMOVE TENANT */}
+                                                        <Pressable
+                                                            style={styles.actionItem}
+                                                            onPress={() => {
+                                                                setOpenMenuBedId(null);
+
+                                                                if (item.tenant?.tenant_id) {
+                                                                    setTenantToRemove(item.tenant.tenant_id);
+                                                                    setRemoveTenantVisible(true);
+                                                                }
+                                                            }}
+                                                        >
+                                                            <Text style={styles.actionText}>
+                                                                Remove Tenant
+                                                            </Text>
+                                                        </Pressable>
+
+                                                    </>
+                                                ) : (
+                                                    <>
+
+                                                        {/* Add tenant */}
+                                                        <Pressable
+                                                            style={styles.actionItem}
+                                                            onPress={() => {
+                                                                setOpenMenuBedId(null);
+
+                                                                resetAddTenantForm();
+
+                                                                setTenantToAddBedId(item.bed_id);
+                                                                setTenantToAddBedNumber(item.bed_number);
+                                                                setAddTenantVisible(true);
+                                                            }}
+                                                        >
+                                                            <Text
+                                                                style={
+                                                                    styles.actionText
+                                                                }
+                                                            >
+                                                                Add Tenant
+                                                            </Text>
+                                                        </Pressable>
+
+                                                        {!item.tenant && item.status !== "INACTIVE" && (
+                                                            <>
+                                                                {/* Delete bed */}
+                                                                <Pressable
+                                                                    style={styles.actionItem}
+                                                                    onPress={() => {
+                                                                        setOpenMenuBedId(null);
+
+                                                                        Alert.alert(
+                                                                            "Delete Bed",
+                                                                            "Are you sure you want to delete this bed?",
+                                                                            [
+                                                                                {
+                                                                                    text: "Cancel",
+                                                                                    style: "cancel",
+                                                                                },
+                                                                                {
+                                                                                    text: "Delete",
+                                                                                    style: "destructive",
+                                                                                    onPress: () => handleDeleteBed(item.bed_id),
+                                                                                },
+                                                                            ]
+                                                                        );
+                                                                    }}
+                                                                >
+                                                                    <Text
+                                                                        style={
+                                                                            styles.actionText
+                                                                        }
+                                                                    >
+                                                                        Delete Bed
+                                                                    </Text>
+                                                                </Pressable>
+                                                            </>
+                                                        )}
+
+                                                    </>
+                                                )}
+
+                                            </View>
+                                        </View>
+                                    </Modal>
+
+                                </View>
+
+
+                                {/* Expanded information card */}
+                                {selectedBedId === item.bed_id && (
+                                    <View style={styles.tenantDetailsCard}>
+
+                                        {tenantLoading ? (
+                                            <ActivityIndicator size="small" />
+
+                                        ) : item.tenant && tenantDetails ? (
+
+                                            <>
+                                                {/* Tenant Header */}
+                                                <View style={styles.tenantPremiumHeader}>
+
+                                                    <View style={styles.tenantAvatar}>
+                                                        <Text style={styles.tenantAvatarText}>
+                                                            {tenantDetails.tenant.full_name
+                                                                .split(" ")
+                                                                .map((name: string) => name[0])
+                                                                .slice(0, 2)
+                                                                .join("")
+                                                                .toUpperCase()}
+                                                        </Text>
+                                                    </View>
+
+                                                    <View style={styles.tenantHeaderInfo}>
+                                                        <Text
+                                                            style={styles.tenantHeaderName}
+                                                            numberOfLines={1}
+                                                        >
+                                                            {tenantDetails.tenant.full_name}
+                                                        </Text>
+
+                                                        <Text style={styles.tenantHeaderRole}>
+                                                            Tenant
+                                                        </Text>
+                                                    </View>
+
+                                                    <View style={styles.occupiedBadge}>
+                                                        <Text style={styles.occupiedBadgeText}>
+                                                            Occupied
+                                                        </Text>
+                                                    </View>
+
+                                                </View>
+
+
+                                                {/* Information Content */}
+                                                <View style={styles.informationColumns}>
+
+                                                    {/* LEFT — Tenant Information */}
+                                                    <View style={styles.tenantColumn}>
+
+                                                        <View style={styles.columnHeader}>
+                                                            <Ionicons
+                                                                name="person-outline"
+                                                                size={16}
+                                                                color="#2563EB"
+                                                            />
+
+                                                            <Text style={styles.columnHeaderText}>
+                                                                Tenant Information
+                                                            </Text>
+                                                        </View>
+
+
+                                                        {/* Phone */}
+                                                        <View style={styles.infoRow}>
+
+                                                            <Ionicons
+                                                                name="call-outline"
+                                                                size={16}
+                                                                color="#64748B"
+                                                            />
+
+                                                            <Text style={styles.infoLabel}>
+                                                                Phone
+                                                            </Text>
+
+                                                            <Text
+                                                                style={styles.infoValue}
+                                                                numberOfLines={1}
+                                                            >
+                                                                {tenantDetails.tenant.phone}
+                                                            </Text>
+
+                                                        </View>
+
+
+                                                        {/* Gender */}
+                                                        <View style={styles.infoRow}>
+
+                                                            <Ionicons
+                                                                name="male-female-outline"
+                                                                size={16}
+                                                                color="#64748B"
+                                                            />
+
+                                                            <Text style={styles.infoLabel}>
+                                                                Gender
+                                                            </Text>
+
+                                                            <Text style={styles.infoValue}>
+                                                                {tenantDetails.tenant.gender || "-"}
+                                                            </Text>
+
+                                                        </View>
+
+
+                                                        {/* Address */}
+                                                        <View style={styles.infoRow}>
+
+                                                            <Ionicons
+                                                                name="location-outline"
+                                                                size={16}
+                                                                color="#64748B"
+                                                            />
+
+                                                            <Text style={styles.infoLabel}>
+                                                                Address
+                                                            </Text>
+
+                                                            <Text
+                                                                style={styles.infoValue}
+                                                                numberOfLines={2}
+                                                            >
+                                                                {tenantDetails.tenant.permanent_address || "-"}
+                                                            </Text>
+
+                                                        </View>
+
+
+                                                        {/* Emergency */}
+                                                        <View style={styles.infoRow}>
+
+                                                            <Ionicons
+                                                                name="call-outline"
+                                                                size={16}
+                                                                color="#64748B"
+                                                            />
+
+                                                            <Text style={styles.infoLabel}>
+                                                                Emergency
+                                                            </Text>
+
+                                                            <Text
+                                                                style={styles.infoValue}
+                                                                numberOfLines={1}
+                                                            >
+                                                                {tenantDetails.tenant.emergency_contact_phone || "-"}
+                                                            </Text>
+
+                                                        </View>
+
+
+                                                        {/* Aadhaar */}
+                                                        <View style={styles.infoRow}>
+
+                                                            <Ionicons
+                                                                name="card-outline"
+                                                                size={16}
+                                                                color="#64748B"
+                                                            />
+
+                                                            <Text style={styles.infoLabel}>
+                                                                Aadhaar
+                                                            </Text>
+
+                                                            <Text
+                                                                style={styles.infoValue}
+                                                                numberOfLines={1}
+                                                            >
+                                                                {tenantDetails.tenant.aadhaar_number || "-"}
+                                                            </Text>
+
+                                                        </View>
+
+                                                    </View>
+
+
+                                                    {/* VERTICAL DIVIDER */}
+                                                    <View style={styles.columnDivider} />
+
+
+                                                    {/* RIGHT — Allocation Information */}
+                                                    <View style={styles.allocationColumn}>
+
+                                                        <View style={styles.columnHeader}>
+                                                            <Ionicons
+                                                                name="calendar-outline"
+                                                                size={16}
+                                                                color="#16A34A"
+                                                            />
+
+                                                            <Text
+                                                                style={[
+                                                                    styles.columnHeaderText,
+                                                                    styles.allocationHeaderText,
+                                                                ]}
+                                                            >
+                                                                Allocation Info
+                                                            </Text>
+                                                        </View>
+
+
+                                                        {/* Check-in Date */}
+                                                        <View style={styles.allocationInfoRow}>
+
+                                                            <Ionicons
+                                                                name="calendar-outline"
+                                                                size={16}
+                                                                color="#2563EB"
+                                                            />
+
+                                                            <View style={styles.allocationTextContainer}>
+                                                                <Text style={styles.allocationLabel}>
+                                                                    Check-in Date
+                                                                </Text>
+
+                                                                <Text style={styles.allocationValue}>
+                                                                    {tenantDetails.allocation.check_in_date}
+                                                                </Text>
+                                                            </View>
+
+                                                        </View>
+
+
+                                                        {/* Monthly Rent */}
+                                                        <View style={styles.allocationInfoRow}>
+
+                                                            <Ionicons
+                                                                name="cash-outline"
+                                                                size={16}
+                                                                color="#16A34A"
+                                                            />
+
+                                                            <View style={styles.allocationTextContainer}>
+                                                                <Text style={styles.allocationLabel}>
+                                                                    Monthly Rent
+                                                                </Text>
+
+                                                                <Text style={styles.allocationValue}>
+                                                                    ₹{tenantDetails.allocation.rent}
+                                                                </Text>
+                                                            </View>
+
+                                                        </View>
+
+
+                                                        {/* Security Deposit */}
+                                                        <View style={styles.allocationInfoRow}>
+
+                                                            <Ionicons
+                                                                name="shield-checkmark-outline"
+                                                                size={16}
+                                                                color="#7C3AED"
+                                                            />
+
+                                                            <View style={styles.allocationTextContainer}>
+                                                                <Text style={styles.allocationLabel}>
+                                                                    Security Deposit
+                                                                </Text>
+
+                                                                <Text style={styles.allocationValue}>
+                                                                    ₹{tenantDetails.allocation.security_deposit}
+                                                                </Text>
+                                                            </View>
+
+                                                        </View>
+
+                                                    </View>
+
+                                                </View>
+
+                                            </>
+
+                                        ) : !item.tenant ? (
+
+                                            <View style={styles.availableBedContent}>
+
+                                                <View style={styles.availableBedHeader}>
+                                                    <View style={styles.availableIconBox}>
+                                                        <Ionicons
+                                                            name="checkmark-circle-outline"
+                                                            size={20}
+                                                            color="#16A34A"
+                                                        />
+                                                    </View>
+
+                                                    <View style={styles.availableTextContainer}>
+                                                        <Text style={styles.availableTitle}>
+                                                            Bed is available
+                                                        </Text>
+
+                                                        <Text style={styles.availableSubtitle}>
+                                                            Add a tenant to this bed
+                                                        </Text>
+                                                    </View>
+                                                </View>
+
+                                                <Pressable
+                                                    style={styles.addTenantButton}
+                                                    onPress={() => {
+                                                        resetAddTenantForm();
+                                                        setTenantToAddBedId(item.bed_id);
+                                                        setTenantToAddBedNumber(item.bed_number);
+                                                        setAddTenantVisible(true);
+                                                    }}
+                                                >
+
+                                                    <Text style={styles.addTenantButtonText}>
+                                                        Add Tenant
+                                                    </Text>
+                                                </Pressable>
+
+                                            </View>
+
+                                        ) : null}
+
+                                    </View>
+                                )}
+
+                            </View>
+                        );
+                    }}
+                />
+            )}
 
 
 
@@ -1064,11 +1168,6 @@ export default function RoomPage() {
                                         // Remove tenant
                                         const result = await removeTenant(
                                             tenantToRemove
-                                        );
-
-                                        console.log(
-                                            "Remove tenant response:",
-                                            result
                                         );
 
                                         // Close popup
@@ -1151,10 +1250,7 @@ export default function RoomPage() {
                     />
 
                     {/* Bottom sheet */}
-                    <KeyboardAvoidingView
-                        behavior={Platform.OS === "ios" ? "padding" : undefined}
-                        style={styles.addTenantSheet}
-                    >
+                    <View style={styles.addTenantSheet}>
 
                         {/* Drag handle */}
                         <View style={styles.addTenantHandle} />
@@ -1167,7 +1263,9 @@ export default function RoomPage() {
                         {/* Form will come here later */}
                         <ScrollView
                             style={{ flex: 1 }}
-                            contentContainerStyle={{ flexGrow: 1, paddingBottom: 30 }}
+                            contentContainerStyle={{
+                                paddingBottom: keyboardHeight + 40,
+                            }}
                             showsVerticalScrollIndicator={false}
                             keyboardShouldPersistTaps="handled"
                         >
@@ -1488,28 +1586,32 @@ export default function RoomPage() {
                                 Aadhaar Number
                             </Text>
 
-                            <TextInput
-                                style={[
-                                    styles.addTenantInput,
-                                    addAadhaarError &&
-                                        styles.addTenantInputWithError,
-                                ]}
-                                value={addAadhaar}
-                                onChangeText={(text) => {
-                                    setAddAadhaar(formatAadhaar(text));
-                                    setAddAadhaarError("");
-                                }}
-                                placeholder="XXXX-XXXX-XXXX"
-                                keyboardType="numeric"
-                                placeholderTextColor="#64748B"
-                                maxLength={14}
-                            />
+                            <View style={styles.addTenantInputWrapper}>
 
-                            {addAadhaarError ? (
-                                <Text style={styles.addTenantErrorInside}>
-                                    {addAadhaarError}
-                                </Text>
-                            ) : null}
+                                <TextInput
+                                    style={[
+                                        styles.addTenantInput,
+                                        addAadhaarError &&
+                                            styles.addTenantInputWithError,
+                                    ]}
+                                    value={addAadhaar}
+                                    onChangeText={(text) => {
+                                        setAddAadhaar(formatAadhaar(text));
+                                        setAddAadhaarError("");
+                                    }}
+                                    placeholder="XXXX-XXXX-XXXX"
+                                    keyboardType="numeric"
+                                    placeholderTextColor="#64748B"
+                                    maxLength={14}
+                                />
+
+                                {addAadhaarError ? (
+                                    <Text style={styles.addTenantErrorInside}>
+                                        {addAadhaarError}
+                                    </Text>
+                                ) : null}
+
+                            </View>
                             
                             {addTenantError ? (
                                 <Text style={styles.addTenantApiError}>
@@ -1662,7 +1764,6 @@ export default function RoomPage() {
                                             }
                                         );
 
-                                        console.log("Add tenant response:", result);
 
                                         // Close Add Tenant form
                                         setAddTenantVisible(false);
@@ -1716,7 +1817,7 @@ export default function RoomPage() {
 
                         </ScrollView>
 
-                    </KeyboardAvoidingView>
+                    </View>
 
                 </View>
             </Modal>
@@ -1767,6 +1868,86 @@ const styles = StyleSheet.create({
         fontWeight:"600",
         fontSize: 15,
         color: "#4e617d",
+    },
+
+    bedSkeletonContainer: {
+        gap: 12,
+    },
+
+    bedSkeletonCard: {
+        height: 92,
+        width: "100%",
+        borderRadius: 16,
+        backgroundColor: "#F1F5F9",
+        borderWidth: 1,
+        borderColor: "#E2E8F0",
+        overflow: "hidden",
+        position: "relative",
+    },
+
+    bedSkeletonShimmer: {
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        width: 120,
+        backgroundColor: "#FFFFFF",
+        opacity: 0.65,
+    },
+
+    bedSkeletonIcon: {
+        position: "absolute",
+        left: 18,
+        top: 18,
+        width: 52,
+        height: 52,
+        borderRadius: 14,
+        backgroundColor: "#E2E8F0",
+    },
+
+    bedSkeletonInfo: {
+        position: "absolute",
+        left: 88,
+        top: 18,
+    },
+
+    bedSkeletonName: {
+        width: 150,
+        height: 18,
+        borderRadius: 8,
+        backgroundColor: "#E2E8F0",
+    },
+
+    bedSkeletonRent: {
+        width: 85,
+        height: 16,
+        borderRadius: 8,
+        backgroundColor: "#E2E8F0",
+        marginTop: 10,
+    },
+
+    bedSkeletonDate: {
+        width: 110,
+        height: 13,
+        borderRadius: 7,
+        backgroundColor: "#E2E8F0",
+        marginTop: 8,
+    },
+
+    bedSkeletonRight: {
+        position: "absolute",
+        right: 72,
+        top: 60,
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: "#E2E8F0",
+    },
+
+    bedSkeleton: {
+        width: "100%",
+        height: 92,
+        borderRadius: 16,
+        backgroundColor: "#E2E8F0",
     },
 
     bedCard: {
@@ -2396,7 +2577,6 @@ const styles = StyleSheet.create({
 
     addTenantSheet: {
         height: "78%",
-        maxHeight: "78%",
         backgroundColor: "#F8FAFC",
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,

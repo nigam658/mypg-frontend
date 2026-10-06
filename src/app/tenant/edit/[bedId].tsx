@@ -13,6 +13,7 @@ import {
     TextInput,
     View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { getTenantByBedId, updateTenant, } from "../../../services/tenant";
 
 export default function EditTenant() {
@@ -146,22 +147,69 @@ export default function EditTenant() {
                 return;
             }
             setNameError("");
+
+            // Gender validation
+            if (!gender || !genderOptions.includes(gender)) {
+                setSaving(false);
+                return;
+            }
             
-            // rent validation
-            if (!rent.trim() || Number(rent) <= 0) {
+            // Rent validation
+            const rentValue = rent.trim();
+
+            if (!rentValue) {
+                setRentError("Rent is required");
+                setSaving(false);
+                return;
+            }
+
+            if (!/^\d+(\.\d+)?$/.test(rentValue)) {
+                setRentError("Enter a valid rent amount");
+                setSaving(false);
+                return;
+            }
+
+            if (Number(rentValue) <= 0) {
                 setRentError("Rent must be greater than 0");
                 setSaving(false);
                 return;
             }
+
             setRentError("");
 
-            // security deposit validation
-            if (securityDeposit.trim() && Number(securityDeposit) < 0) {
+            // Security deposit validation
+            const securityDepositValue = securityDeposit.trim();
+
+            if (
+                securityDepositValue &&
+                !/^\d+(\.\d+)?$/.test(securityDepositValue)
+            ) {
+                setSecurityDepositError("Enter a valid security deposit");
+                setSaving(false);
+                return;
+            }
+
+            if (
+                securityDepositValue &&
+                Number(securityDepositValue) < 0
+            ) {
                 setSecurityDepositError("Cannot be negative");
                 setSaving(false);
                 return;
             }
+
             setSecurityDepositError("");
+
+            // Address validation
+            const addressValue = address.trim();
+
+            if (addressValue && addressValue.length < 3) {
+                setAddressError("Address must be at least 3 characters.");
+                setSaving(false);
+                return;
+            }
+
+            setAddressError("");
 
             // Phone validation
             if (!phone.trim()) {
@@ -223,21 +271,18 @@ export default function EditTenant() {
             const changedFields = buildChangedFields();
 
             if (Object.keys(changedFields).length === 0) {
-                console.log("No changes made.");
+                setSuccessMessage("No changes were made.");
+                setSaving(false);
                 return;
             }
 
-            console.log(
-                "Sending only changed fields:",
-                changedFields
-            );
-
+            
             const result = await updateTenant(
                 tenantData.tenant.id,
                 changedFields
             );
 
-            console.log(result.message);
+            
 
             router.replace({
                 pathname: "/room/[roomId]",
@@ -249,12 +294,20 @@ export default function EditTenant() {
             });
 
         } catch (error: any) {
+            const message = error.message || "Failed to update tenant.";
 
-            console.log(
-                "Update error:",
-                error.message || error
-            );
+            // Show duplicate-phone and other phone-related backend errors
+            // directly under the phone field.
+            if (message.toLowerCase().includes("phone number")) {
+                setPhoneError(message);
+                return;
+            }
 
+            // Show other update errors on the screen.
+            setError(message);
+
+            console.error("Update error:", message);
+            
         } finally {
             setSaving(false);
         }
@@ -331,377 +384,384 @@ export default function EditTenant() {
 
 
     return (
-        <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-        >
-            <ScrollView
-                contentContainerStyle={styles.container}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
+        <SafeAreaView edges={["top"]} style={styles.safeArea}>
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
             >
+                <ScrollView
+                    contentContainerStyle={styles.container}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                >
 
 
-                <Text style={styles.title}>
-                    Edit Tenant
-                </Text>
+                    <Text style={styles.title}>
+                        Edit Tenant
+                    </Text>
 
-                {/* Name + Gender */}
-                <View style={styles.row}>
+                    {/* Name + Gender */}
+                    <View style={styles.row}>
 
-                    <View style={styles.halfField}>
-                        <Text style={styles.label}>
-                            Name
-                        </Text>
+                        <View style={styles.halfField}>
+                            <Text style={styles.label}>
+                                Name
+                            </Text>
 
-                        <View style={styles.inputWrapper}>
+                            <View style={styles.inputWrapper}>
 
-                            <TextInput
-                                style={[
-                                    styles.input,
-                                    nameError && styles.inputWithError,
-                                ]}
-                                value={fullName}
-                                onChangeText={(text) => {
-                                    setFullName(text);
-                                    setNameError("");
-                                }}
-                            />
+                                <TextInput
+                                    style={[
+                                        styles.input,
+                                        nameError && styles.inputWithError,
+                                    ]}
+                                    value={fullName}
+                                    onChangeText={(text) => {
+                                        setFullName(text);
+                                        setNameError("");
+                                    }}
+                                />
 
-                            {nameError ? (
-                                <Text
-                                    style={styles.errorInside}
-                                    numberOfLines={1}
-                                >
-                                    {nameError}
-                                </Text>
-                            ) : null}
+                                {nameError ? (
+                                    <Text
+                                        style={styles.errorInside}
+                                        numberOfLines={1}
+                                    >
+                                        {nameError}
+                                    </Text>
+                                ) : null}
 
+                            </View>
                         </View>
+
+                        <View style={styles.halfField}>
+                            <Text style={styles.label}>
+                                Gender
+                            </Text>
+
+                            <Pressable
+                                style={styles.input}
+                                onPress={() => {
+                                    const currentIndex = genderOptions.indexOf(gender);
+
+                                    const nextIndex =
+                                        (currentIndex + 1) % genderOptions.length;
+
+                                    setGender(genderOptions[nextIndex]);
+                                }}
+                            >
+                                <Text style={styles.genderText}>
+                                    {gender}
+                                </Text>
+
+                                <Text style={styles.arrow}>
+                                    ▼
+                                </Text>
+                            </Pressable>
+                        </View>
+
                     </View>
 
-                    <View style={styles.halfField}>
-                        <Text style={styles.label}>
-                            Gender
-                        </Text>
+
+                    {/* Rent + Security Deposit */}
+                    <View style={styles.row}>
+
+                        <View style={styles.halfField}>
+                            <Text style={styles.label}>
+                                Rent
+                            </Text>
+
+                            <View style={styles.inputWrapper}>
+
+                                <TextInput
+                                    style={[
+                                        styles.input,
+                                        rentError && styles.inputWithError,
+                                    ]}
+                                    value={rent}
+                                    onChangeText={(text) => {
+                                        setRent(text);
+                                        setRentError("");
+                                    }}
+                                    keyboardType="numeric"
+                                />
+
+                                {rentError ? (
+                                    <Text
+                                        style={styles.errorInside}
+                                        numberOfLines={1}
+                                    >
+                                        {rentError}
+                                    </Text>
+                                ) : null}
+
+                            </View>
+                        </View>
+
+                        <View style={styles.halfField}>
+                            <Text style={styles.label}>
+                                Security Deposit
+                            </Text>
+
+                            <View style={styles.inputWrapper}>
+
+                                <TextInput
+                                    style={[
+                                        styles.input,
+                                        securityDepositError && styles.inputWithError,
+                                    ]}
+                                    value={securityDeposit}
+                                    onChangeText={(text) => {
+                                        setSecurityDeposit(text);
+                                        setSecurityDepositError("");
+                                    }}
+                                    keyboardType="numeric"
+                                />
+
+                                {securityDepositError ? (
+                                    <Text
+                                        style={styles.errorInside}
+                                        numberOfLines={1}
+                                    >
+                                        {securityDepositError}
+                                    </Text>
+                                ) : null}
+
+                            </View>
+                        </View>
+
+                    </View>
+
+
+                    <Text style={styles.label}>
+                        Address
+                    </Text>
+
+                    <View style={styles.inputWrapper}>
+
+                        <TextInput
+                            style={[
+                                styles.input,
+                                addressError && styles.inputWithError,
+                            ]}
+                            value={address}
+                            onChangeText={(text) => {
+                                setAddress(text);
+                                setAddressError("");
+                            }}
+                        />
+
+                        {addressError ? (
+                            <Text
+                                style={styles.errorInside}
+                                numberOfLines={1}
+                            >
+                                {addressError}
+                            </Text>
+                        ) : null}
+
+                    </View>
+
+                    {/*Phone */}
+                    <Text style={styles.label}>
+                        Phone
+                    </Text>
+
+                    <View style={styles.inputWrapper}>
+
+                        <TextInput
+                            style={[
+                                styles.input,
+                                phoneError && styles.inputWithError,
+                            ]}
+                            value={phone}
+                            onChangeText={(text) => {
+                                setPhone(text);
+                                setPhoneError("");
+                            }}
+                            keyboardType="phone-pad"
+                        />
+
+                        {phoneError ? (
+                            <Text
+                                style={styles.errorInside}
+                                numberOfLines={1}
+                            >
+                                {phoneError}
+                            </Text>
+                        ) : null}
+
+                    </View>
+
+                    {/*Emergency Phone */}
+                    <Text style={styles.label}>
+                        Emergency Phone
+                    </Text>
+
+                    <View style={styles.inputWrapper}>
+                        <TextInput
+                            style={[
+                                styles.input,
+                                emergencyPhoneError && styles.inputWithError,
+                            ]}
+                            value={emergencyPhone}
+                            onChangeText={(text) => {
+                                setEmergencyPhone(text);
+                                setEmergencyPhoneError("");
+                            }}
+                            keyboardType="phone-pad"
+                        />
+
+                        {emergencyPhoneError ? (
+                            <Text
+                                style={styles.errorInside}
+                                numberOfLines={1}
+                            >
+                                {emergencyPhoneError}
+                            </Text>
+                        ) : null}
+                    </View>
+
+
+                    <Text style={styles.label}>
+                        Aadhaar Number
+                    </Text>
+
+                    <View style={styles.inputWrapper}>
+                        <TextInput
+                            style={[
+                                styles.input,
+                                aadhaarError && styles.inputWithError,
+                            ]}
+                            value={aadhaar}
+                            placeholder="XXXX-XXXX-XXXX"
+                            onChangeText={(text) => {
+                                setAadhaar(formatAadhaar(text));
+                                setAadhaarError("");
+                            }}
+                            keyboardType="numeric"
+                            maxLength={14}
+                        />
+
+                        {aadhaarError ? (
+                            <Text
+                                style={styles.errorInside}
+                                numberOfLines={1}
+                            >
+                                {aadhaarError}
+                            </Text>
+                        ) : null}
+                    </View>
+
+
+                    <Text style={styles.label}>
+                        Check-in Date
+                    </Text>
+
+                    <View style={styles.inputWrapper}>
 
                         <Pressable
                             style={styles.input}
                             onPress={() => {
-                                const currentIndex = genderOptions.indexOf(gender);
-
-                                const nextIndex =
-                                    (currentIndex + 1) % genderOptions.length;
-
-                                setGender(genderOptions[nextIndex]);
+                                setCheckInDateError("");
+                                setShowDatePicker(true);
                             }}
                         >
-                            <Text style={styles.genderText}>
-                                {gender}
-                            </Text>
+                            <View style={styles.dateRow}>
 
-                            <Text style={styles.arrow}>
-                                ▼
-                            </Text>
+                                <Ionicons
+                                    name="calendar-outline"
+                                    size={20}
+                                    color="#475569"
+                                />
+
+                                <Text style={styles.dateText}>
+                                    {checkInDate || "Select date"}
+                                </Text>
+
+                            </View>
                         </Pressable>
+
+                        {checkInDateError ? (
+                            <Text
+                                style={styles.errorInside}
+                                numberOfLines={1}
+                            >
+                                {checkInDateError}
+                            </Text>
+                        ) : null}
+
                     </View>
 
-                </View>
+                    {showDatePicker && (
+                        <DateTimePicker
+                            value={
+                                checkInDate
+                                    ? new Date(checkInDate)
+                                    : new Date()
+                            }
+                            mode="date"
+                            display="default"
+                            onValueChange={(event, selectedDate) => {
 
+                                if (selectedDate) {
 
-                {/* Rent + Security Deposit */}
-                <View style={styles.row}>
+                                    const year = selectedDate.getFullYear();
 
-                    <View style={styles.halfField}>
-                        <Text style={styles.label}>
-                            Rent
-                        </Text>
+                                    const month = String(
+                                        selectedDate.getMonth() + 1
+                                    ).padStart(2, "0");
 
-                        <View style={styles.inputWrapper}>
+                                    const day = String(
+                                        selectedDate.getDate()
+                                    ).padStart(2, "0");
 
-                            <TextInput
-                                style={[
-                                    styles.input,
-                                    rentError && styles.inputWithError,
-                                ]}
-                                value={rent}
-                                onChangeText={(text) => {
-                                    setRent(text);
-                                    setRentError("");
-                                }}
-                                keyboardType="numeric"
-                            />
+                                    setCheckInDate(
+                                        `${year}-${month}-${day}`
+                                    );
 
-                            {rentError ? (
-                                <Text
-                                    style={styles.errorInside}
-                                    numberOfLines={1}
-                                >
-                                    {rentError}
-                                </Text>
-                            ) : null}
+                                    setCheckInDateError("");
+                                }
+                            }}
+                            onDismiss={() => {
+                                setShowDatePicker(false);
+                            }}
+                        />
+                    )}
 
-                        </View>
-                    </View>
-
-                    <View style={styles.halfField}>
-                        <Text style={styles.label}>
-                            Security Deposit
-                        </Text>
-
-                        <View style={styles.inputWrapper}>
-
-                            <TextInput
-                                style={[
-                                    styles.input,
-                                    securityDepositError && styles.inputWithError,
-                                ]}
-                                value={securityDeposit}
-                                onChangeText={(text) => {
-                                    setSecurityDeposit(text);
-                                    setSecurityDepositError("");
-                                }}
-                                keyboardType="numeric"
-                            />
-
-                            {securityDepositError ? (
-                                <Text
-                                    style={styles.errorInside}
-                                    numberOfLines={1}
-                                >
-                                    {securityDepositError}
-                                </Text>
-                            ) : null}
-
-                        </View>
-                    </View>
-
-                </View>
-
-
-                <Text style={styles.label}>
-                    Address
-                </Text>
-
-                <View style={styles.inputWrapper}>
-
-                    <TextInput
-                        style={[
-                            styles.input,
-                            addressError && styles.inputWithError,
-                        ]}
-                        value={address}
-                        onChangeText={(text) => {
-                            setAddress(text);
-                            setAddressError("");
-                        }}
-                    />
-
-                    {addressError ? (
-                        <Text
-                            style={styles.errorInside}
-                            numberOfLines={1}
-                        >
-                            {addressError}
+                    {successMessage ? (
+                        <Text style={styles.successMessage}>
+                            {successMessage}
                         </Text>
                     ) : null}
-
-                </View>
-
-                {/*Phone */}
-                <Text style={styles.label}>
-                    Phone
-                </Text>
-
-                <View style={styles.inputWrapper}>
-
-                    <TextInput
-                        style={[
-                            styles.input,
-                            phoneError && styles.inputWithError,
-                        ]}
-                        value={phone}
-                        onChangeText={(text) => {
-                            setPhone(text);
-                            setPhoneError("");
-                        }}
-                        keyboardType="phone-pad"
-                    />
-
-                    {phoneError ? (
-                        <Text
-                            style={styles.errorInside}
-                            numberOfLines={1}
-                        >
-                            {phoneError}
-                        </Text>
-                    ) : null}
-
-                </View>
-
-                {/*Emergency Phone */}
-                <Text style={styles.label}>
-                    Emergency Phone
-                </Text>
-
-                <View style={styles.inputWrapper}>
-                    <TextInput
-                        style={[
-                            styles.input,
-                            emergencyPhoneError && styles.inputWithError,
-                        ]}
-                        value={emergencyPhone}
-                        onChangeText={(text) => {
-                            setEmergencyPhone(text);
-                            setEmergencyPhoneError("");
-                        }}
-                        keyboardType="phone-pad"
-                    />
-
-                    {emergencyPhoneError ? (
-                        <Text
-                            style={styles.errorInside}
-                            numberOfLines={1}
-                        >
-                            {emergencyPhoneError}
-                        </Text>
-                    ) : null}
-                </View>
-
-
-                <Text style={styles.label}>
-                    Aadhaar Number
-                </Text>
-
-                <View style={styles.inputWrapper}>
-                    <TextInput
-                        style={[
-                            styles.input,
-                            aadhaarError && styles.inputWithError,
-                        ]}
-                        value={aadhaar}
-                        placeholder="XXXX-XXXX-XXXX"
-                        onChangeText={(text) => {
-                            setAadhaar(formatAadhaar(text));
-                            setAadhaarError("");
-                        }}
-                        keyboardType="numeric"
-                        maxLength={14}
-                    />
-
-                    {aadhaarError ? (
-                        <Text
-                            style={styles.errorInside}
-                            numberOfLines={1}
-                        >
-                            {aadhaarError}
-                        </Text>
-                    ) : null}
-                </View>
-
-
-                <Text style={styles.label}>
-                    Check-in Date
-                </Text>
-
-                <View style={styles.inputWrapper}>
 
                     <Pressable
-                        style={styles.input}
-                        onPress={() => {
-                            setCheckInDateError("");
-                            setShowDatePicker(true);
-                        }}
+                        style={styles.saveButton}
+                        onPress={handleSave}
+                        disabled={saving}
                     >
-                        <View style={styles.dateRow}>
-
-                            <Ionicons
-                                name="calendar-outline"
-                                size={20}
-                                color="#475569"
-                            />
-
-                            <Text style={styles.dateText}>
-                                {checkInDate || "Select date"}
+                        {saving ? (
+                            <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                            <Text style={styles.saveButtonText}>
+                                Save Changes
                             </Text>
-
-                        </View>
+                        )}
                     </Pressable>
-
-                    {checkInDateError ? (
-                        <Text
-                            style={styles.errorInside}
-                            numberOfLines={1}
-                        >
-                            {checkInDateError}
-                        </Text>
-                    ) : null}
-
-                </View>
-
-                {showDatePicker && (
-                    <DateTimePicker
-                        value={
-                            checkInDate
-                                ? new Date(checkInDate)
-                                : new Date()
-                        }
-                        mode="date"
-                        display="default"
-                        onValueChange={(event, selectedDate) => {
-
-                            if (selectedDate) {
-
-                                const year = selectedDate.getFullYear();
-
-                                const month = String(
-                                    selectedDate.getMonth() + 1
-                                ).padStart(2, "0");
-
-                                const day = String(
-                                    selectedDate.getDate()
-                                ).padStart(2, "0");
-
-                                setCheckInDate(
-                                    `${year}-${month}-${day}`
-                                );
-
-                                setCheckInDateError("");
-                            }
-                        }}
-                        onDismiss={() => {
-                            setShowDatePicker(false);
-                        }}
-                    />
-                )}
-
-                {successMessage ? (
-                    <Text style={styles.successMessage}>
-                        {successMessage}
-                    </Text>
-                ) : null}
-
-                <Pressable
-                    style={styles.saveButton}
-                    onPress={handleSave}
-                    disabled={saving}
-                >
-                    {saving ? (
-                        <ActivityIndicator color="#FFFFFF" />
-                    ) : (
-                        <Text style={styles.saveButtonText}>
-                            Save Changes
-                        </Text>
-                    )}
-                </Pressable>
-            </ScrollView>
-         </KeyboardAvoidingView>
+                </ScrollView>
+            </KeyboardAvoidingView>
+        </SafeAreaView>
         
     );
 }
 
 
 const styles = StyleSheet.create({
+
+    safeArea: {
+        flex: 1,
+        backgroundColor: "#F8FAFC",
+    },
 
     container: {
         padding: 20,

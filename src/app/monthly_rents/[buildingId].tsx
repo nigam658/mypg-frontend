@@ -37,6 +37,7 @@ export default function DueRentPage() {
     const [collectSuccess, setCollectSuccess] = useState("");
     const [collectLoading, setCollectLoading] = useState(false);
     const [activeTab, setActiveTab] = useState<"newest" | "oldest">("newest");
+    const [searchText, setSearchText] = useState("");
     // 45° shimmer animation for new rent badges
     const shimmerAnimation = useRef(new Animated.Value(0)).current;
 
@@ -49,8 +50,6 @@ export default function DueRentPage() {
                 const data = await getDueMonthlyRentsByBuilding(
                     Number(buildingId)
                 );
-
-                console.log("DUE RENT DATA:", data);
 
                 setDueRents(data);
 
@@ -281,6 +280,32 @@ export default function DueRentPage() {
     };
 
 
+    // =========================
+    // Pending rent search filter
+    // =========================
+
+    const search = searchText.trim().toLowerCase();
+
+    const filteredRents = (
+        activeTab === "newest" ? newestRents : oldestRents
+    ).filter((item) => {
+        if (!search) {
+            return true;
+        }
+
+        const tenantName = item.tenant_name?.toLowerCase() || "";
+        const roomNumber = item.room_number?.toString().toLowerCase() || "";
+
+        // Tenant name → search can match anywhere in the name
+        const tenantMatches = tenantName.includes(search);
+
+        // Room number → search must match from the beginning
+        const roomMatches = roomNumber.startsWith(search);
+
+        return tenantMatches || roomMatches;
+    });
+
+
 
     // UI
     return (
@@ -290,6 +315,34 @@ export default function DueRentPage() {
                 <Text style={styles.pageTitle}>
                     Rent Collection
                 </Text>
+            </View>
+
+            {/* Pending rent search */}
+            <View style={styles.searchContainer}>
+                <FontAwesome
+                    name="search"
+                    size={18}
+                    color="#8FA9C9"
+                />
+
+                <TextInput
+                    style={styles.searchInput}
+                    value={searchText}
+                    onChangeText={setSearchText}
+                    placeholder="Search name or room"
+                    placeholderTextColor="#8FA9C9"
+                    autoCapitalize="none"
+                />
+
+                {searchText.length > 0 && (
+                    <Pressable onPress={() => setSearchText("")}>
+                        <FontAwesome
+                            name="close"
+                            size={16}
+                            color="#8FA9C9"
+                        />
+                    </Pressable>
+                )}
             </View>
 
             {collectSuccess !== "" && (
@@ -341,7 +394,7 @@ export default function DueRentPage() {
             </View>
 
             <FlatList
-                data={activeTab === "newest" ? newestRents : oldestRents}
+                data={filteredRents}
                 keyExtractor={(item) =>
                     item.monthly_rent_id.toString()
                 }
@@ -660,6 +713,27 @@ const styles = StyleSheet.create({
         letterSpacing: -0.4,
     },
 
+    
+    // =========================
+    // Pending rent search
+    // =========================
+
+    searchContainer: {
+        flexDirection: "row",
+        alignItems: "center",
+        height: 50,
+        paddingHorizontal: 18,
+        marginBottom: 14,
+        borderRadius: 16,
+        backgroundColor: "#0F213A",
+    },
+
+    searchInput: {
+        flex: 1,
+        marginLeft: 14,
+        fontSize: 17,
+        color: "#FFFFFF",
+    },
 
 
     // =========================

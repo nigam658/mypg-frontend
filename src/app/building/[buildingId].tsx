@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+    Animated,
     FlatList,
     Modal,
     Pressable,
@@ -31,6 +32,7 @@ import {
     const { buildingId, buildingName  } = useLocalSearchParams();
 
     const [floors, setFloors] = useState<any[]>([]);
+    const [loadingFloors, setLoadingFloors] = useState(true);
     const activeFloorNumbers = floors.map(
         (floor) => floor.floorNumber
     );
@@ -45,6 +47,7 @@ import {
     const [isDeleteFloorConfirmed, setIsDeleteFloorConfirmed] = useState(false);
 
     const [rooms, setRooms] = useState<any[]>([]);
+    const [loadingRooms, setLoadingRooms] = useState(true);
     const [showAddRoomModal, setShowAddRoomModal] = useState(false);
     const [selectedRoomNumber, setSelectedRoomNumber] = useState<string | null>(null);
 
@@ -54,6 +57,9 @@ import {
     const [roomNumberLimit, setRoomNumberLimit] = useState(3);
     const [dueRents, setDueRents] = useState<any[]>([]);
     const [currentMonthCollection, setCurrentMonthCollection] = useState(0);
+    // Tracks whether current month collection is being fetched.
+    const [loadingCollection, setLoadingCollection] = useState(true);
+    const shimmer = useRef(new Animated.Value(0)).current;
     // Get the current month name.
     const currentMonthName = new Date().toLocaleString("en-IN", {month: "long",});
     const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
@@ -86,19 +92,59 @@ import {
             setDueRents(dueRentsData);
 
             // Refresh current month's rent collection.
-            const collectionData = await getCurrentMonthCollection(
-                Number(buildingId)
-            );
+            setLoadingCollection(true);
 
-            setCurrentMonthCollection(
-                Number(collectionData.total_collected)
-            );
+            try {
+                const collectionData = await getCurrentMonthCollection(
+                    Number(buildingId)
+                );
+
+                setCurrentMonthCollection(
+                    Number(collectionData.total_collected)
+                );
+            } catch (error) {
+                console.error("COLLECTION FETCH ERROR:", error);
+            } finally {
+                setLoadingCollection(false);
+            }
 
 
         } catch (error) {
-            console.log("Failed to refresh building data:", error);
+            
         }
     }, [buildingId, selectedFloorId]);
+
+
+    // Controls the bright-to-dim pulse animation
+    // used by all skeleton loading components.
+    useEffect(() => {
+        const animation = Animated.loop(
+            Animated.sequence([
+                Animated.timing(shimmer, {
+                    toValue: 1,
+                    duration: 900,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(shimmer, {
+                    toValue: 0,
+                    duration: 900,
+                    useNativeDriver: true,
+                }),
+            ])
+        );
+
+        animation.start();
+
+        return () => {
+            animation.stop();
+        };
+    }, [shimmer]);
+
+    const shimmerOpacity = shimmer.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0.45, 1],
+    });
+
 
     useFocusEffect(
         useCallback(() => {
@@ -108,38 +154,72 @@ import {
 
     useEffect(() => {
         const fetchFloors = async () => {
+
+            // Set loading state to true while floors are being fetched
+            // from the backend.
+            setLoadingFloors(true);
+
             try {
-                const data = await getFloorsByBuildingId(Number(buildingId));
+                // Fetch all floors belonging to the current building.
+                const data = await getFloorsByBuildingId(
+                    Number(buildingId)
+                );
 
-                    setFloors(data);
-                    if (data.length > 0) {
-                        setSelectedFloorId(data[0].id);
-                    }
+                // Store the fetched floors in state.
+                setFloors(data);
 
-                    } catch (error) {
-                        console.log("Failed to fetch floors:", error);
-                    }
+                // If floors are available, automatically select
+                // the first floor as the default selected floor.
+                if (data.length > 0) {
+                    setSelectedFloorId(data[0].id);
+                }
+
+            } catch (error) {
+
+                // Keep the existing error handling behavior.
+                // The loading state will still be stopped in finally.
+                
+            } finally {
+
+                // Floor loading is finished whether the API
+                // request succeeded or failed.
+                setLoadingFloors(false);
+            }
         };
+
+        // Fetch floors whenever the building ID changes.
         fetchFloors();
-        }, [buildingId]);
+
+    }, [buildingId]);
 
 
+    // fetch rooms
     useEffect(() => {
         if (selectedFloorId === null) {
             return;
         }
+
         const fetchRooms = async () => {
+
+            // Show room skeleton while rooms are loading.
+            setLoadingRooms(true);
+
             try {
                 const data = await getRoomsByFloorId(selectedFloorId);
                 setRooms(data);
-                }catch (error) {
-                    console.log("Failed to fetch rooms:", error);
-                }
+
+            } catch (error) {
+
+            } finally {
+
+                // Hide room skeleton after loading finishes.
+                setLoadingRooms(false);
+            }
         };
+
         fetchRooms();
-        }, [selectedFloorId]);
-        console.log("ROOMS:", JSON.stringify(rooms, null, 2));
-        console.log("DUE RENTS:", dueRents);
+
+    }, [selectedFloorId]);
 
     
     useEffect(() => {
@@ -155,8 +235,6 @@ import {
                 setDueRents(data);
 
             } catch (error) {
-
-                console.log("Failed to fetch due rents:", error);
 
             }
         };
@@ -223,7 +301,7 @@ import {
             setSelectedDeleteFloor(null);
 
         } catch (error: any) {
-            console.log("DELETE FLOOR ERROR:", error);
+            
         } finally {
             setIsDeletingFloor(false);
         }
@@ -276,9 +354,18 @@ import {
                                 </View>
 
                                 <View style={styles.summaryAmountBox}>
-                                    <Text style={styles.collectedRentAmount}>
-                                        ₹{currentMonthCollection.toLocaleString("en-IN")}
-                                    </Text>
+                                    {loadingCollection ? (
+                                        <Animated.View
+                                            style={[
+                                                styles.summaryAmountSkeleton,
+                                                { opacity: shimmerOpacity },
+                                            ]}
+                                        />
+                                    ) : (
+                                        <Text style={styles.collectedRentAmount}>
+                                            ₹{currentMonthCollection.toLocaleString("en-IN")}
+                                        </Text>
+                                    )}
 
                                     <Text style={styles.summaryCardSubtext}>
                                         {currentMonthName}
@@ -345,107 +432,130 @@ import {
                             </Pressable>
                         </View>
 
-                        <FlatList
-                            data={floors}
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            keyExtractor={(floor) => floor.id.toString()}
-                            contentContainerStyle={styles.floorList}
-                            renderItem={({ item }) => (
-                                <Pressable
-                                    style={[
-                                        styles.floorButton,
-                                        selectedFloorId === item.id &&
-                                            styles.selectedFloorButton,
-                                    ]}
-                                    onPress={() => setSelectedFloorId(item.id)}
-
-                                    onLongPress={() => {
-                                        Haptics.impactAsync(
-                                            Haptics.ImpactFeedbackStyle.Medium
-                                        );
-                                        setSelectedDeleteFloor(item);
-                                        setShowDeleteFloorModal(true);
-                                    }}
-                                >
-                                    <Text
+                        {loadingFloors ? (
+                            <View style={styles.floorSkeletonRow}>
+                                {[1, 2, 3, 4].map((item) => (
+                                    <Animated.View
+                                        key={item}
                                         style={[
-                                            styles.floorText,
-                                            selectedFloorId === item.id &&
-                                                styles.selectedFloorText,
+                                            styles.floorSkeleton,
+                                            { opacity: shimmerOpacity },
                                         ]}
+                                    />
+                                ))}
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={floors}
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                keyExtractor={(floor) => floor.id.toString()}
+                                contentContainerStyle={styles.floorList}
+                                renderItem={({ item }) => (
+                                    <Pressable
+                                        style={[
+                                            styles.floorButton,
+                                            selectedFloorId === item.id &&
+                                                styles.selectedFloorButton,
+                                        ]}
+                                        onPress={() => setSelectedFloorId(item.id)}
+                                        onLongPress={() => {
+                                            Haptics.impactAsync(
+                                                Haptics.ImpactFeedbackStyle.Medium
+                                            );
+                                            setSelectedDeleteFloor(item);
+                                            setShowDeleteFloorModal(true);
+                                        }}
                                     >
-                                        {item.floorNumber === 0 ? "G" : item.floorNumber}
-                                    </Text>
-                                </Pressable>
-                            )}
-                        />
+                                        <Text
+                                            style={[
+                                                styles.floorText,
+                                                selectedFloorId === item.id &&
+                                                    styles.selectedFloorText,
+                                            ]}
+                                        >
+                                            {item.floorNumber === 0 ? "G" : item.floorNumber}
+                                        </Text>
+                                    </Pressable>
+                                )}
+                            />
+                        )}
                     </View>
                 
                     <View style={styles.roomsContainer}>
                         <Text style={styles.roomTitle}>Rooms</Text>
 
-                        <FlatList
-                            data={rooms}
-                            keyExtractor={(room) => room.id.toString()}
-                            showsVerticalScrollIndicator={false}
-                            renderItem={({ item }) => (
-                                <Pressable
-                                    style={styles.roomCard}
-
-                                    onLongPress={() => {
-                                        Haptics.impactAsync(
-                                            Haptics.ImpactFeedbackStyle.Light
-                                        );
-                                        setSelectedRoom(item);
-                                        setIsRoomDeleteConfirmed(false);
-                                        setShowRoomActions(true);
-                                    }}
-
-                                    // navigate to bed page // 
-                                    onPress={() => {
-                                        router.push({
-                                            pathname: "/room/[roomId]",
-                                            params: {
-                                                roomId: item.id.toString(),
-                                                roomNumber: item.roomNumber.toString(),
-                                            },
-                                        });
-                                    }}
+                        {loadingRooms ? (
+                            <View style={styles.roomSkeletonContainer}>
+                                {[1, 2, 3, 4].map((item) => (
+                                    <Animated.View
+                                        key={item}
+                                        style={[
+                                            styles.roomSkeleton,
+                                            { opacity: shimmerOpacity },
+                                        ]}
+                                    />
+                                ))}
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={rooms}
+                                keyExtractor={(room) => room.id.toString()}
+                                showsVerticalScrollIndicator={false}
+                                renderItem={({ item }) => (
+                                    <Pressable
+                                        style={styles.roomCard}
+                                        onLongPress={() => {
+                                            Haptics.impactAsync(
+                                                Haptics.ImpactFeedbackStyle.Light
+                                            );
+                                            setSelectedRoom(item);
+                                            setIsRoomDeleteConfirmed(false);
+                                            setShowRoomActions(true);
+                                        }}
+                                        onPress={() => {
+                                            router.push({
+                                                pathname: "/room/[roomId]",
+                                                params: {
+                                                    roomId: item.id.toString(),
+                                                    roomNumber: item.roomNumber.toString(),
+                                                },
+                                            });
+                                        }}
                                     >
-                                    <View style={styles.roomRow}>
+                                        <View style={styles.roomRow}>
 
-                                        <View style={styles.roomNumberWrapper}>
+                                            <View style={styles.roomNumberWrapper}>
 
-                                            <View style={styles.roomNumberBox}>
-                                                <Text style={styles.roomNumber}>
-                                                    {item.roomNumber}
-                                                </Text>
-                                            </View>
-
-                                            {item.unpaidTenants > 0 && (
-                                                <View style={styles.unpaidBadge}>
-                                                    <Text style={styles.unpaidBadgeText}>
-                                                        {item.unpaidTenants}
+                                                <View style={styles.roomNumberBox}>
+                                                    <Text style={styles.roomNumber}>
+                                                        {item.roomNumber}
                                                     </Text>
                                                 </View>
-                                            )}
+
+                                                {item.unpaidTenants > 0 && (
+                                                    <View style={styles.unpaidBadge}>
+                                                        <Text style={styles.unpaidBadgeText}>
+                                                            {item.unpaidTenants}
+                                                        </Text>
+                                                    </View>
+                                                )}
+
+                                            </View>
+
+                                            <Text style={styles.bedCount}>
+                                                {item.totalBeds} / {item.occupiedBeds} occupied
+                                            </Text>
+
+                                            <Text style={styles.roomArrow}>
+                                                ›
+                                            </Text>
 
                                         </View>
-
-                                        <Text style={styles.bedCount}>
-                                            {item.occupiedBeds} / {item.totalBeds} occupied
-                                        </Text>
-
-                                        <Text style={styles.roomArrow}>
-                                            ›
-                                        </Text>
-
-                                    </View>
-                                    
-                                </Pressable>
-                            )}
-                        />
+                                    </Pressable>
+                                )}
+                            />
+                        )}
 
                         {/* Delete room pop-up */}
                         <Modal
@@ -1093,6 +1203,19 @@ const styles = StyleSheet.create({
         paddingRight: 16,
     },
 
+    floorSkeletonRow: {
+        flexDirection: "row",
+        paddingRight: 16,
+    },
+
+    floorSkeleton: {
+        width: 70,
+        height: 50,
+        marginRight: 16,
+        borderRadius: 10,
+        backgroundColor: "#E2E8F0",
+    },
+
     floorButton: {
         paddingVertical: 14,
         paddingHorizontal: 25,
@@ -1315,6 +1438,17 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         borderWidth: 1.5,
         borderColor: "#E5E7EB",
+    },
+
+    roomSkeletonContainer: {
+        gap: 12,
+    },
+
+    roomSkeleton: {
+        width: "100%",
+        height: 64,
+        borderRadius: 14,
+        backgroundColor: "#E2E8F0",
     },
 
     roomRow: {
@@ -1739,6 +1873,13 @@ const styles = StyleSheet.create({
     summaryAmountBox: {
         marginLeft: 10,
         flex: 1,
+    },
+
+    summaryAmountSkeleton: {
+        width: "45%",
+        height: 15,
+        borderRadius: 6,
+        backgroundColor: "#CDE8D5",
     },
 
     pendingRentAmount: {

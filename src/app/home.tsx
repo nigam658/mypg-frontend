@@ -8,12 +8,14 @@ import {
     StyleSheet,
     Text,
     TextInput,
+    TouchableOpacity,
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL } from "../config/api";
 
 import PropertyCard from "../components/PropertyCard";
+import PropertyCardSkeleton from "../components/PropertyCardSkeleton";
 import { authenticatedFetch } from "../services/auth";
 import { getMyBuildings } from "../services/building";
 
@@ -23,6 +25,9 @@ type Property = {
     name: string;
     address: string;
     totalRooms: number;
+    totalBeds: number;
+    occupiedBeds: number;
+    availableBeds: number;
 };
 
 
@@ -61,6 +66,9 @@ export default function HomeScreen() {
     // =========================
     const [roomNumber, setRoomNumber] = useState("");
     const [properties, setProperties] = useState<Property[]>([]);
+    // Tracks whether building data is currently being fetched.
+    const [loadingBuildings, setLoadingBuildings] = useState(true);
+    const [buildingError, setBuildingError] = useState(false);
     const [greeting] = useState(getGreeting());
     const [owner, setOwner] = useState<Owner | null>(null);
     const [showProfile, setShowProfile] = useState(false);
@@ -82,9 +90,29 @@ export default function HomeScreen() {
     // =========================
     const loadBuildings = async () => {
 
-        const data = await getMyBuildings();
+       // Start building data loading.
+        setLoadingBuildings(true);
 
-        setProperties(data.buildings);
+        // Clear any previous error before starting a new request.
+        setBuildingError(false);
+
+
+        try {
+
+            const data = await getMyBuildings();
+            setProperties(data.buildings);
+
+        } catch (error) {
+
+        // Building data could not be loaded.
+        setBuildingError(true);
+
+        } finally {
+
+            // Building data has finished loading.
+            setLoadingBuildings(false);
+        }
+
     };
 
 
@@ -152,7 +180,7 @@ export default function HomeScreen() {
                             </Text>
 
                             <Text style={styles.title}>
-                                MY PG
+                                NG PG
                             </Text>
                         </View>
 
@@ -204,83 +232,108 @@ export default function HomeScreen() {
                 {/* =========================
                     Buildings
                 ========================= */}
-                {properties.length > 0 ? (
 
+                {/* Buildings Heading */}
+                <View style={styles.sectionHeader}>
+                    <Text style={styles.buildingsTitle}>
+                        Your Buildings
+                    </Text>
+
+                    <View style={styles.buildingCount}>
+                        <Text style={styles.buildingCountText}>
+                            {loadingBuildings ? "..." : properties.length}
+                        </Text>
+                    </View>
+                </View>
+
+                {/* =========================
+                    Building Content
+                ========================= */}
+
+                {loadingBuildings ? (
+
+                    // Show skeleton cards while buildings are loading.
                     <>
-
-                        {/* Buildings Heading */}
-                        <View style={styles.sectionHeader}>
-
-                            <Text style={styles.buildingsTitle}>
-                                Your Buildings
-                            </Text>
-
-
-                            <View style={styles.buildingCount}>
-
-                                <Text style={styles.buildingCountText}>
-                                    {properties.length}
-                                </Text>
-
-                            </View>
-
-                        </View>
-
-
-                        {/* Building Cards */}
-                        <ScrollView
-                            style={styles.cardsContainer}
-                            showsVerticalScrollIndicator={false}
-                            contentContainerStyle={styles.cardsContent}
-                        >
-
-                            {properties.map((property) => (
-
-                                <PropertyCard
-                                    key={property.id}
-                                    pgId={`PG-${property.id}`}
-                                    name={property.name}
-                                    address={property.address}
-                                    totalRooms={property.totalRooms}
-
-                                    onPress={() => {
-
-                                        router.push({
-                                            pathname: "/building/[buildingId]",
-
-                                            params: {
-                                                buildingId: property.id.toString(),
-                                                buildingName: property.name,
-                                            },
-                                        });
-
-                                    }}
-                                />
-
-                            ))}
-
-                        </ScrollView>
-
+                        <PropertyCardSkeleton />
+                        <PropertyCardSkeleton />
                     </>
+
+                ) : buildingError ? (
+
+                    // Show error message when building API fails.
+                    <View style={styles.emptyState}>
+                        <Text style={styles.emptyTitle}>
+                            Failed to load PGs
+                        </Text>
+
+                        <Text style={styles.emptyMessage}>
+                            Please check your internet connection and try again.
+                        </Text>
+
+                        <TouchableOpacity
+                            onPress={loadBuildings}
+                            style={{
+                                marginTop: 16,
+                                paddingHorizontal: 24,
+                                paddingVertical: 10,
+                                borderRadius: 8,
+                                backgroundColor: "#1E3A8A",
+                            }}
+                        >
+                            <Text
+                                style={{
+                                    color: "#FFFFFF",
+                                    fontWeight: "600",
+                                }}
+                            >
+                                Retry
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                ) : properties.length > 0 ? (
+
+                    // Show actual building cards when data is available.
+                    <ScrollView
+                        style={styles.cardsContainer}
+                        showsVerticalScrollIndicator={false}
+                        contentContainerStyle={styles.cardsContent}
+                    >
+                        {properties.map((property) => (
+                            <PropertyCard
+                                key={property.id}
+                                pgId={`PG-${property.id}`}
+                                name={property.name}
+                                address={property.address}
+                                totalRooms={property.totalRooms}
+                                totalBeds={property.totalBeds}
+                                occupiedBeds={property.occupiedBeds}
+                                availableBeds={property.availableBeds}
+                                onPress={() => {
+                                    router.push({
+                                        pathname: "/building/[buildingId]",
+                                        params: {
+                                            buildingId: property.id.toString(),
+                                            buildingName: property.name,
+                                        },
+                                    });
+                                }}
+                            />
+                        ))}
+                    </ScrollView>
 
                 ) : (
 
-                    /* =========================
-                    Empty State
-                    ========================= */
+                    // Show this only when API succeeds but there are no buildings.
                     <View style={styles.emptyState}>
-
                         <Text style={styles.emptyTitle}>
                             No PGs yet
                         </Text>
 
-
                         <Text style={styles.emptyMessage}>
                             Create your first PG to get started.
                         </Text>
-
                     </View>
-
                 )}
 
 

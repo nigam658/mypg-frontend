@@ -20,7 +20,12 @@ export const getMyBuildings = async () => {
       id: building.id,
       name: building.name,
       address: building.address,
+
+      // Building occupancy summary
       totalRooms: building.total_rooms,
+      totalBeds: building.total_beds,
+      occupiedBeds: building.occupied_beds,
+      availableBeds: building.available_beds,
     })),
   };
 };

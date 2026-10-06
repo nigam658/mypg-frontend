@@ -4,7 +4,7 @@
     "slug": "mypg-frontend",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/NGPGnew.png",
     "scheme": "mypgfrontend",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -15,7 +15,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
-        "foregroundImage": "./assets/images/icon.png"
+        "foregroundImage": "./assets/images/NGPGnew.png"
       },
       "predictiveBackGestureEnabled": false
     },

@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Image, Pressable, Text, View } from "react-native";
 
 import {
     checkAccessToken,
@@ -12,6 +13,7 @@ export default function IndexScreen() {
 
     const [isChecking, setIsChecking] = useState(true);
     const [networkError, setNetworkError] = useState(false);
+    const [authError, setAuthError] = useState(false);
 
     useEffect(() => {
         checkAuthentication();
@@ -58,9 +60,26 @@ export default function IndexScreen() {
                         refreshError
                     );
 
-                    // Refresh token is invalid,
-                    // expired, or unavailable → Login
-                    router.replace("/login");
+                    // Refresh token is genuinely invalid or expired.
+                    // The current session cannot be restored.
+                    if (
+                        refreshError instanceof Error &&
+                        refreshError.message === "REFRESH_TOKEN_EXPIRED"
+                    ) {
+                        // The refresh token is no longer valid.
+                        // The existing session cannot be restored.
+                        await SecureStore.deleteItemAsync("access_token");
+                        await SecureStore.deleteItemAsync("refresh_token");
+
+                        router.replace("/login");
+                        return;
+                    }
+
+                    // Network/server/unexpected refresh errors
+                    // should NOT send the owner to Login.
+                    setAuthError(true);
+                    setIsChecking(false);
+
                 }
 
             } else {
@@ -81,6 +100,7 @@ export default function IndexScreen() {
                     error
                 );
 
+                setAuthError(true);
                 setIsChecking(false);
             }
         }
@@ -141,8 +161,97 @@ export default function IndexScreen() {
                         </Text>
                     </Pressable>
                 </>
+            ) : authError ? (
+                <>
+                    <Text
+                        style={{
+                            fontSize: 22,
+                            fontWeight: "700",
+                            color: "#071426",
+                            textAlign: "center",
+                        }}
+                    >
+                        We couldn't verify your account
+                    </Text>
+
+                    <Text
+                        style={{
+                            marginTop: 8,
+                            fontSize: 14,
+                            color: "#64748B",
+                            textAlign: "center",
+                        }}
+                    >
+                        Please try again.
+                    </Text>
+
+                    {/* Retry button */}
+                    <Pressable
+                        style={{
+                            marginTop: 20,
+                            backgroundColor: "#071426",
+                            paddingHorizontal: 24,
+                            paddingVertical: 12,
+                            borderRadius: 10,
+                        }}
+                        onPress={() => {
+                            setAuthError(false);
+                            setIsChecking(true);
+                            checkAuthentication();
+                        }}
+                    >
+                        <Text
+                            style={{
+                                color: "#FFFFFF",
+                                fontSize: 14,
+                                fontWeight: "600",
+                            }}
+                        >
+                            Retry
+                        </Text>
+                    </Pressable>
+
+                    {/* Log in again button */}
+                    <Pressable
+                        style={{
+                            marginTop: 12,
+                            paddingHorizontal: 24,
+                            paddingVertical: 12,
+                            borderRadius: 10,
+                            borderWidth: 1,
+                            borderColor: "#071426",
+                        }}
+                        onPress={async () => {
+                            // Remove the current authentication tokens.
+                            await SecureStore.deleteItemAsync("access_token");
+                            await SecureStore.deleteItemAsync("refresh_token");
+
+                            // Send the owner to the Login screen.
+                            router.replace("/login");
+
+                        }}
+                    >
+                        <Text
+                            style={{
+                                color: "#071426",
+                                fontSize: 14,
+                                fontWeight: "600",
+                            }}
+                        >
+                            Log in again
+                        </Text>
+                    </Pressable>
+                </>
             ) : (
-                <Text>Checking authentication...</Text>
+                <Image
+                    source={require("../../assets/images/NGPGnew.png")}
+                    style={{
+                        width: 160,
+                        height: 160,
+                        borderRadius: 50,
+                        resizeMode: "cover",
+                    }}
+                />
             )}
         </View>
     );

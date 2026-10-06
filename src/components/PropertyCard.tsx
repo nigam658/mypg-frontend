@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View, } from "react-native";
 
 type PropertyCardProps = {
@@ -6,6 +6,9 @@ type PropertyCardProps = {
   name: string;
   address: string;
   totalRooms: number;
+  totalBeds: number;
+  occupiedBeds: number;
+  availableBeds: number;
   onPress: () => void;
 };
 
@@ -14,6 +17,9 @@ export default function PropertyCard({
     name,
     address,
     totalRooms,
+    totalBeds,
+    occupiedBeds,
+    availableBeds,
     onPress,
     }: PropertyCardProps) {
 
@@ -36,9 +42,6 @@ export default function PropertyCard({
 
         {/* Building Information */}
         <View style={styles.info}>
-            <Text style={styles.pgId}>
-                {pgId}
-            </Text>
 
             <Text style={styles.pgName}>
                 {name}
@@ -48,9 +51,57 @@ export default function PropertyCard({
                 {address}
             </Text>
 
-            <Text style={styles.totalRooms}>
-                {totalRooms} Rooms
-            </Text>
+            <View style={styles.propertyStats}>
+
+                {/* Total rooms */}
+                <View style={styles.statItem}>
+                    <MaterialCommunityIcons
+                        name="door-closed"
+                        size={15}
+                        color="#071426"
+                    />
+                    <Text style={styles.statText}>
+                        {totalRooms}
+                    </Text>
+                </View>
+
+                {/* Total beds */}
+                <View style={styles.statItem}>
+                    <Ionicons
+                        name="bed-outline"
+                        size={14}
+                        color="#071426"
+                    />
+                    <Text style={styles.statText}>
+                        {totalBeds}
+                    </Text>
+                </View>
+
+                {/* Occupied beds */}
+                <View style={styles.statItem}>
+                    <Ionicons
+                        name="ellipse"
+                        size={9}
+                        color="#071426"
+                    />
+                    <Text style={styles.statText}>
+                        {occupiedBeds}
+                    </Text>
+                </View>
+
+                {/* Available beds */}
+                <View style={styles.statItem}>
+                    <Ionicons
+                        name="ellipse-outline"
+                        size={9}
+                        color="#071426"
+                    />
+                    <Text style={styles.statText}>
+                        {availableBeds}
+                    </Text>
+                </View>
+
+            </View>
         </View>
         </Pressable>
         );
@@ -75,7 +126,7 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
 
-        // Allows PG ID to be positioned relative to the card
+        
         position: "relative",
     },
 
@@ -104,21 +155,6 @@ const styles = StyleSheet.create({
         marginLeft: 12,
     },
 
-
-    // =========================
-    // PG ID
-    // =========================
-    pgId: {
-        position: "absolute",
-        right: 14,
-        bottom: 10,
-
-        fontSize: 11,
-        fontWeight: "600",
-        color: "#8A929D",
-    },
-
-
     // =========================
     // PG Name
     // =========================
@@ -140,13 +176,30 @@ const styles = StyleSheet.create({
     },
 
 
+    
+
     // =========================
-    // Total Rooms
+    // Property Statistics
     // =========================
-    totalRooms: {
-        fontSize: 14,
+    propertyStats: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 35,
+    },
+
+    statText: {
+        fontSize: 13,
         fontWeight: "600",
         color: "#071426",
+    },
+
+    // =========================
+    // Individual Property Stat
+    // =========================
+    statItem: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
     },
 
 

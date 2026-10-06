@@ -148,10 +148,10 @@ export default function CreatePG() {
                 )}
 
 
-                {/*CITY INPUT */}
+                {/*STATE INPUT */}
                 <TextInput
                     style={styles.input}
-                    placeholder="City"
+                    placeholder="State"
                     placeholderTextColor="#94A3B8"
                     value={city}
                     onChangeText={setCity}

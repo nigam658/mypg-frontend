@@ -30,12 +30,7 @@ export default function LoginScreen() {
     const [showPassword, setShowPassword] = useState(false);
 
     const [isLoading, setIsLoading] = useState(false);
-    const logoutForTesting = async () => {
-        await SecureStore.deleteItemAsync("access_token");
-        await SecureStore.deleteItemAsync("refresh_token");
 
-        console.log("Tokens deleted");
-    };
     const insets = useSafeAreaInsets();
 
     const handleLogin = async () => {
@@ -67,7 +62,9 @@ export default function LoginScreen() {
         }
         setIsLoading(true);
 
+
         try {
+            
             const response = await fetch(
                 `${API_BASE_URL}/auth/login`,
                 {
@@ -95,7 +92,6 @@ export default function LoginScreen() {
                     data.refresh_token
                 );
 
-                console.log("Login successful");
                 
                 router.replace("/home");
 
