@@ -3,9 +3,11 @@ import * as Haptics from "expo-haptics";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+    Alert,
     Animated,
     FlatList,
     Modal,
+    PanResponder,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -26,1100 +28,1471 @@ import {
     getCurrentMonthCollection,
     getDueMonthlyRentsByBuilding
 } from "@/services/monthlyRent";
+import { getVacatingTenantsByBuilding, moveTenant, } from "@/services/tenant";
+// Read the shared Move Tenant session.
+import { cancelMoveTenant, completeMoveTenant, useMoveTenantSession, } from "@/services/moveTenantState";
 
 
-  export default function BuildingPage() {
-    const { buildingId, buildingName  } = useLocalSearchParams();
+    export default function BuildingPage() {
+        const { buildingId, buildingName  } = useLocalSearchParams();
+        // Read the active Move Tenant session.
+        const moveSession = useMoveTenantSession();
 
-    const [floors, setFloors] = useState<any[]>([]);
-    const [loadingFloors, setLoadingFloors] = useState(true);
-    const activeFloorNumbers = floors.map(
-        (floor) => floor.floorNumber
-    );
-    const [selectedFloorId, setSelectedFloorId] = useState<number | null>(null);
-    const [showAddFloorModal, setShowAddFloorModal] = useState(false);
-    const [selectedFloorNumber, setSelectedFloorNumber] = useState<number | null>(null);
-    const [floorError, setFloorError] = useState("");
-    const [isAddingFloor, setIsAddingFloor] = useState(false);
-    const [showDeleteFloorModal, setShowDeleteFloorModal] = useState(false);
-    const [isDeletingFloor, setIsDeletingFloor] = useState(false);
-    const [selectedDeleteFloor, setSelectedDeleteFloor] = useState<any | null>(null);
-    const [isDeleteFloorConfirmed, setIsDeleteFloorConfirmed] = useState(false);
+        const [floors, setFloors] = useState<any[]>([]);
+        const [loadingFloors, setLoadingFloors] = useState(true);
+        const activeFloorNumbers = floors.map(
+            (floor) => floor.floorNumber
+        );
+        const [selectedFloorId, setSelectedFloorId] = useState<number | null>(null);
+        const [showAddFloorModal, setShowAddFloorModal] = useState(false);
+        const [selectedFloorNumber, setSelectedFloorNumber] = useState<number | null>(null);
+        const [floorError, setFloorError] = useState("");
+        const [isAddingFloor, setIsAddingFloor] = useState(false);
+        const [showDeleteFloorModal, setShowDeleteFloorModal] = useState(false);
+        const [isDeletingFloor, setIsDeletingFloor] = useState(false);
+        const [selectedDeleteFloor, setSelectedDeleteFloor] = useState<any | null>(null);
+        const [isDeleteFloorConfirmed, setIsDeleteFloorConfirmed] = useState(false);
 
-    const [rooms, setRooms] = useState<any[]>([]);
-    const [loadingRooms, setLoadingRooms] = useState(true);
-    const [showAddRoomModal, setShowAddRoomModal] = useState(false);
-    const [selectedRoomNumber, setSelectedRoomNumber] = useState<string | null>(null);
+        const [rooms, setRooms] = useState<any[]>([]);
+        const [loadingRooms, setLoadingRooms] = useState(true);
+        const [showAddRoomModal, setShowAddRoomModal] = useState(false);
+        const [selectedRoomNumber, setSelectedRoomNumber] = useState<string | null>(null);
 
-    const [numberOfBeds, setNumberOfBeds] = useState(1);
-    const [roomError, setRoomError] = useState("");
-    const [isAddingRoom, setIsAddingRoom] = useState(false);
-    const [roomNumberLimit, setRoomNumberLimit] = useState(3);
-    const [dueRents, setDueRents] = useState<any[]>([]);
-    const [currentMonthCollection, setCurrentMonthCollection] = useState(0);
-    // Tracks whether current month collection is being fetched.
-    const [loadingCollection, setLoadingCollection] = useState(true);
-    const shimmer = useRef(new Animated.Value(0)).current;
-    // Get the current month name.
-    const currentMonthName = new Date().toLocaleString("en-IN", {month: "long",});
-    const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
-    const [showRoomActions, setShowRoomActions] = useState(false);
-    const [isRoomDeleteConfirmed, setIsRoomDeleteConfirmed] = useState(false);
-    const [isDeletingRoom, setIsDeletingRoom] = useState(false);
-    const insets = useSafeAreaInsets();
-    const totalDue = dueRents.reduce(
-        (total, rent) => total + Number(rent.remaining_amount),
-        0
-    );
+        const [numberOfBeds, setNumberOfBeds] = useState(1);
+        const [roomError, setRoomError] = useState("");
+        const [isAddingRoom, setIsAddingRoom] = useState(false);
+        const [roomNumberLimit, setRoomNumberLimit] = useState(3);
+        const [dueRents, setDueRents] = useState<any[]>([]);
+        const [animatedTotalDue, setAnimatedTotalDue] = useState(0);
+        const animatedTotalDueRef = useRef(0);
+        const [currentMonthCollection, setCurrentMonthCollection] = useState(0);
+        // Tracks whether current month collection is being fetched.
+        const [loadingCollection, setLoadingCollection] = useState(true);
+        // Number of tenants currently marked as vacating in this building.
+        const [vacatingTenantCount, setVacatingTenantCount] = useState(0);
+        // Index of the currently displayed summary carousel card.
+        // 0 = Rent Collected, 1 = Vacating Tenants.
+        const [summaryCardIndex, setSummaryCardIndex] = useState(0); 
+        const shimmer = useRef(new Animated.Value(0)).current;
+        // Controls the horizontal slide animation of the summary-card content.
+        const summaryCardTranslateX = useRef(new Animated.Value(0)).current;
+        // Records when the owner first touches the summary card.
+        const summaryCardTouchStart = useRef<number | null>(null);
+        // Tracks whether the current touch is a swipe rather than a tap.
+        const summaryCardDidSwipe = useRef(false);
+        // Remembers which card was displayed before the current one.
+        const previousSummaryCardIndex = useRef<number | null>(null);
+        // Keeps the current card index available to the gesture handlers.
+        const summaryCardIndexRef = useRef(summaryCardIndex);
+        summaryCardIndexRef.current = summaryCardIndex;
 
-    // refresh the page
-    const refreshBuildingData = useCallback(async () => {
-        try {
-            // Refresh floors
-            const floorsData = await getFloorsByBuildingId(Number(buildingId));
-            setFloors(floorsData);
+        // Handles card swipes, taps, and hold-to-pause in one place.
+        const summaryCardPanResponder = useRef(
+            PanResponder.create({
+                // Let this handler control touches on the summary card.
+                onStartShouldSetPanResponder: () => true,
 
-            // Refresh rooms
-            if (selectedFloorId !== null) {
-                const roomsData = await getRoomsByFloorId(selectedFloorId);
-                setRooms(roomsData);
-            }
+                // Record the touch start and pause automatic switching.
+                onPanResponderGrant: () => {
+                    summaryCardTouchStart.current = Date.now();
+                    summaryCardDidSwipe.current = false;
+                    setIsSummaryCardHeld(true);
+                },
 
-            // Refresh due rents
-            const dueRentsData = await getDueMonthlyRentsByBuilding(
-                Number(buildingId)
-            );
-            setDueRents(dueRentsData);
+                // Detect horizontal movement so a swipe cannot become a tap.
+                onPanResponderMove: (_event, gestureState) => {
+                    if (
+                        Math.abs(gestureState.dx) > 15 &&
+                        Math.abs(gestureState.dx) > Math.abs(gestureState.dy)
+                    ) {
+                        summaryCardDidSwipe.current = true;
+                    }
+                },
 
-            // Refresh current month's rent collection.
-            setLoadingCollection(true);
+                // Handle either a swipe or a short tap when the touch ends.
+                onPanResponderRelease: (_event, gestureState) => {
+                    const touchDuration =
+                        Date.now() -
+                        (summaryCardTouchStart.current ?? Date.now());
 
-            try {
-                const collectionData = await getCurrentMonthCollection(
-                    Number(buildingId)
-                );
+                    const isHorizontalSwipe =
+                        Math.abs(gestureState.dx) > 40 &&
+                        Math.abs(gestureState.dx) > Math.abs(gestureState.dy);
 
-                setCurrentMonthCollection(
-                    Number(collectionData.total_collected)
-                );
-            } catch (error) {
-                console.error("COLLECTION FETCH ERROR:", error);
-            } finally {
-                setLoadingCollection(false);
-            }
+                    if (isHorizontalSwipe) {
+                        // Left shows Vacating Tenants; right shows Rent Collected.
+                        setSummaryCardIndex(gestureState.dx < 0 ? 1 : 0);
+                    } else if (
+                        !summaryCardDidSwipe.current &&
+                        Math.abs(gestureState.dx) < 15 &&
+                        Math.abs(gestureState.dy) < 15 &&
+                        touchDuration < 600
+                    ) {
+                        console.log("Summary card tapped:", summaryCardIndexRef.current);
+                        // Open the appropriate page based on the currently displayed card.
+                        if (summaryCardIndexRef.current === 1) {
+                            // Keep the existing Vacating Tenants navigation.
+                            router.push({
+                                pathname: "/vacating_tenants/[buildingId]",
+                                params: {
+                                    buildingId: buildingId.toString(),
+                                },
+                            });
+                        } else if (summaryCardIndexRef.current === 0) {
+                            // Open Finance for the currently selected building.
+                            router.push({
+                                pathname: "/finance/[buildingId]",
+                                params: {
+                                    buildingId: buildingId.toString(),
+                                    buildingName: buildingName.toString(),
+                                },
+                            });
+                        }
+                    }
 
+                    // Reset touch tracking and restart the countdown.
+                    summaryCardTouchStart.current = null;
+                    summaryCardDidSwipe.current = false;
+                    setIsSummaryCardHeld(false);
+                },
 
-        } catch (error) {
-            
-        }
-    }, [buildingId, selectedFloorId]);
+                // Resume automatic switching if the gesture is interrupted.
+                onPanResponderTerminate: () => {
+                    summaryCardTouchStart.current = null;
+                    summaryCardDidSwipe.current = false;
+                    setIsSummaryCardHeld(false);
+                },
 
+                onPanResponderTerminationRequest: () => false,
+            })
+        ).current;
 
-    // Controls the bright-to-dim pulse animation
-    // used by all skeleton loading components.
-    useEffect(() => {
-        const animation = Animated.loop(
-            Animated.sequence([
-                Animated.timing(shimmer, {
-                    toValue: 1,
-                    duration: 900,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(shimmer, {
-                    toValue: 0,
-                    duration: 900,
-                    useNativeDriver: true,
-                }),
-            ])
+        const [isSummaryCardHeld, setIsSummaryCardHeld] = useState(false);
+        // Switch cards after 5 seconds, restarting the countdown whenever the
+        // displayed card changes or the owner releases their touch.
+        useFocusEffect(
+            useCallback(() => {
+                // Do not start a countdown while the owner is touching the card.
+                if (isSummaryCardHeld) {
+                    return;
+                }
+
+                // Give the currently displayed card a full 5 seconds.
+                const carouselTimer = setTimeout(() => {
+                    setSummaryCardIndex((currentIndex) =>
+                        currentIndex === 0 ? 1 : 0
+                    );
+                }, 7000);
+
+                // Clear the countdown when the card changes, the screen loses
+                // focus, or the owner touches the card.
+                return () => clearTimeout(carouselTimer);
+            }, [isSummaryCardHeld, summaryCardIndex])
         );
 
-        animation.start();
+                
+        // Animate the summary-card content whenever the displayed card changes.
+        useEffect(() => {
+            // Skip the animation on the first render.
+            if (previousSummaryCardIndex.current === null) {
+                previousSummaryCardIndex.current = summaryCardIndex;
+                return;
+            }
 
-        return () => {
-            animation.stop();
-        };
-    }, [shimmer]);
+            // Determine which direction the new card should slide in from.
+            const direction =
+                summaryCardIndex > previousSummaryCardIndex.current ? 1 : -1;
 
-    const shimmerOpacity = shimmer.interpolate({
-        inputRange: [0, 1],
-        outputRange: [0.45, 1],
-    });
+            // Position the new content slightly to the side before animating.
+            summaryCardTranslateX.setValue(direction * 35);
+
+            // Slide the content smoothly into its normal position.
+            Animated.timing(summaryCardTranslateX, {
+                toValue: 0,
+                duration: 300,
+                useNativeDriver: true,
+            }).start();
+
+            // Remember the current card index for the next transition.
+            previousSummaryCardIndex.current = summaryCardIndex;
+        }, [summaryCardIndex, summaryCardTranslateX]);
 
 
-    useFocusEffect(
-        useCallback(() => {
-            refreshBuildingData();
-        }, [refreshBuildingData])
-    );
+        const currentMonthName = new Date().toLocaleString("en-IN", {month: "long",});
+        const [selectedRoom, setSelectedRoom] = useState<any | null>(null);
+        const [showRoomActions, setShowRoomActions] = useState(false);
+        const [isRoomDeleteConfirmed, setIsRoomDeleteConfirmed] = useState(false);
+        const [isDeletingRoom, setIsDeletingRoom] = useState(false);
+        const insets = useSafeAreaInsets();
+        const totalDue = dueRents.reduce(
+            (total, rent) => total + Number(rent.remaining_amount),
+            0
+        );
+   
+        useEffect(() => {
+            // Start from the amount currently displayed on the screen.
+            const startValue = animatedTotalDueRef.current;
 
-    useEffect(() => {
-        const fetchFloors = async () => {
+            // The latest amount calculated from the fetched rent data.
+            const targetValue = totalDue;
 
-            // Set loading state to true while floors are being fetched
-            // from the backend.
-            setLoadingFloors(true);
+            // Complete the counting animation in 800 milliseconds.
+            const duration = 800;
+            const startTime = Date.now();
 
-            try {
-                // Fetch all floors belonging to the current building.
-                const data = await getFloorsByBuildingId(
-                    Number(buildingId)
+            const animationInterval = setInterval(() => {
+                // Calculate how much animation time has passed.
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+
+                // Ease out so the number slows down naturally near the end.
+                const easedProgress = 1 - Math.pow(1 - progress, 3);
+
+                // Calculate the amount to display at this moment.
+                const nextValue = Math.round(
+                    startValue + (targetValue - startValue) * easedProgress
                 );
 
-                // Store the fetched floors in state.
-                setFloors(data);
+                // Update both the displayed amount and its remembered value.
+                animatedTotalDueRef.current = nextValue;
+                setAnimatedTotalDue(nextValue);
 
-                // If floors are available, automatically select
-                // the first floor as the default selected floor.
-                if (data.length > 0) {
-                    setSelectedFloorId(data[0].id);
+                // Stop at the exact final amount.
+                if (progress >= 1) {
+                    clearInterval(animationInterval);
+                    animatedTotalDueRef.current = targetValue;
+                    setAnimatedTotalDue(targetValue);
+                }
+            }, 16);
+
+            // Clean up if the rent amount changes before animation finishes.
+            return () => clearInterval(animationInterval);
+        }, [totalDue]);
+
+
+        // refresh the page
+        const refreshBuildingData = useCallback(async () => {
+            try {
+                // Refresh floors
+                const floorsData = await getFloorsByBuildingId(Number(buildingId));
+                setFloors(floorsData);
+
+                // Refresh rooms
+                if (selectedFloorId !== null) {
+                    const roomsData = await getRoomsByFloorId(selectedFloorId);
+                    setRooms(roomsData);
+                }
+
+                // Refresh due rents
+                const dueRentsData = await getDueMonthlyRentsByBuilding(
+                    Number(buildingId)
+                );
+                setDueRents(dueRentsData);
+
+                // Refresh current month's rent collection.
+                setLoadingCollection(true);
+
+                try {
+                    const collectionData = await getCurrentMonthCollection(
+                        Number(buildingId)
+                    );
+
+                    setCurrentMonthCollection(
+                        Number(collectionData.total_collected)
+                    );
+                } catch (error) {
+                    console.error("COLLECTION FETCH ERROR:", error);
+                } finally {
+                    setLoadingCollection(false);
+                }
+
+
+                // NEW: Refresh the vacating tenant count.
+                // This code goes immediately after the collection's finally block.
+                try {
+                    const vacatingData = await getVacatingTenantsByBuilding(
+                        Number(buildingId)
+                    );
+
+                    setVacatingTenantCount(vacatingData.count);
+                } catch (error) {
+                    // A vacating API error should not interrupt other page data.
+                    console.error("VACATING TENANTS FETCH ERROR:", error);
                 }
 
             } catch (error) {
-
-                // Keep the existing error handling behavior.
-                // The loading state will still be stopped in finally.
                 
-            } finally {
-
-                // Floor loading is finished whether the API
-                // request succeeded or failed.
-                setLoadingFloors(false);
             }
-        };
-
-        // Fetch floors whenever the building ID changes.
-        fetchFloors();
-
-    }, [buildingId]);
+        }, [buildingId, selectedFloorId]);
 
 
-    // fetch rooms
-    useEffect(() => {
-        if (selectedFloorId === null) {
-            return;
-        }
+        // Controls the bright-to-dim pulse animation
+        // used by all skeleton loading components.
+        useEffect(() => {
+            const animation = Animated.loop(
+                Animated.sequence([
+                    Animated.timing(shimmer, {
+                        toValue: 1,
+                        duration: 900,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(shimmer, {
+                        toValue: 0,
+                        duration: 900,
+                        useNativeDriver: true,
+                    }),
+                ])
+            );
 
-        const fetchRooms = async () => {
+            animation.start();
 
-            // Show room skeleton while rooms are loading.
-            setLoadingRooms(true);
+            return () => {
+                animation.stop();
+            };
+        }, [shimmer]);
+
+        const shimmerOpacity = shimmer.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0.45, 1],
+        });
+
+
+        useFocusEffect(
+            useCallback(() => {
+                refreshBuildingData();
+            }, [refreshBuildingData])
+        );
+
+        useEffect(() => {
+            const fetchFloors = async () => {
+
+                // Set loading state to true while floors are being fetched
+                // from the backend.
+                setLoadingFloors(true);
+
+                try {
+                    // Fetch all floors belonging to the current building.
+                    const data = await getFloorsByBuildingId(
+                        Number(buildingId)
+                    );
+
+                    // Store the fetched floors in state.
+                    setFloors(data);
+
+                    // If floors are available, automatically select
+                    // the first floor as the default selected floor.
+                    if (data.length > 0) {
+                        setSelectedFloorId(data[0].id);
+                    }
+
+                } catch (error) {
+
+                    // Keep the existing error handling behavior.
+                    // The loading state will still be stopped in finally.
+                    
+                } finally {
+
+                    // Floor loading is finished whether the API
+                    // request succeeded or failed.
+                    setLoadingFloors(false);
+                }
+            };
+
+            // Fetch floors whenever the building ID changes.
+            fetchFloors();
+
+        }, [buildingId]);
+
+
+        // fetch rooms
+        useEffect(() => {
+            if (selectedFloorId === null) {
+                return;
+            }
+
+            const fetchRooms = async () => {
+
+                // Show room skeleton while rooms are loading.
+                setLoadingRooms(true);
+
+                try {
+                    const data = await getRoomsByFloorId(selectedFloorId);
+                    setRooms(data);
+
+                } catch (error) {
+
+                } finally {
+
+                    // Hide room skeleton after loading finishes.
+                    setLoadingRooms(false);
+                }
+            };
+
+            fetchRooms();
+
+        }, [selectedFloorId]);
+
+
+        useEffect(() => {
+
+            const fetchDueRents = async () => {
+
+                try {
+
+                    const data = await getDueMonthlyRentsByBuilding(
+                        Number(buildingId)
+                    );
+
+                    setDueRents(data);
+
+                } catch (error) {
+
+                }
+            };
+
+            fetchDueRents();
+
+        }, [buildingId]);
+
+
+        const availableRoomNumbers = floors
+            .find((floor) => floor.id === selectedFloorId)
+            ? Array.from(
+                { length: 99 },
+                (_, index) => {
+                    const floorNumber = floors.find(
+                        (floor) => floor.id === selectedFloorId
+                    )?.floorNumber;
+
+                    return `${floorNumber}${String(index + 1).padStart(2, "0")}`;
+                }
+            ).filter(
+                (roomNumber) =>
+                    !rooms.some((room) => room.roomNumber === roomNumber)
+            )
+            : [];
+
+
+        // Delete selected floor and refresh the page
+        const handleDeleteFloor = async () => {
+            if (!selectedDeleteFloor) return;
 
             try {
-                const data = await getRoomsByFloorId(selectedFloorId);
-                setRooms(data);
+                setIsDeletingFloor(true);
 
-            } catch (error) {
+                // Delete floor from backend
+                await deleteFloor(selectedDeleteFloor.id);
 
-            } finally {
-
-                // Hide room skeleton after loading finishes.
-                setLoadingRooms(false);
-            }
-        };
-
-        fetchRooms();
-
-    }, [selectedFloorId]);
-
-    
-    useEffect(() => {
-
-        const fetchDueRents = async () => {
-
-            try {
-
-                const data = await getDueMonthlyRentsByBuilding(
+                // Refresh active floors
+                const floorsData = await getFloorsByBuildingId(
                     Number(buildingId)
                 );
 
-                setDueRents(data);
+                setFloors(floorsData);
 
-            } catch (error) {
+                // If the deleted floor was selected, select another floor
+                if (selectedFloorId === selectedDeleteFloor.id) {
+                    if (floorsData.length > 0) {
+                        setSelectedFloorId(floorsData[0].id);
+                    } else {
+                        setSelectedFloorId(null);
+                        setRooms([]);
+                    }
+                }
 
+                // Refresh pending rent data
+                const dueRentsData = await getDueMonthlyRentsByBuilding(
+                    Number(buildingId)
+                );
+
+                setDueRents(dueRentsData);
+
+                // Close delete popup
+                setShowDeleteFloorModal(false);
+                setSelectedDeleteFloor(null);
+
+            } catch (error: any) {
+                
+            } finally {
+                setIsDeletingFloor(false);
             }
         };
 
-        fetchDueRents();
-
-    }, [buildingId]);
-
-
-    const availableRoomNumbers = floors
-        .find((floor) => floor.id === selectedFloorId)
-        ? Array.from(
-            { length: 99 },
-            (_, index) => {
-                const floorNumber = floors.find(
-                    (floor) => floor.id === selectedFloorId
-                )?.floorNumber;
-
-                return `${floorNumber}${String(index + 1).padStart(2, "0")}`;
-            }
-        ).filter(
-            (roomNumber) =>
-                !rooms.some((room) => room.roomNumber === roomNumber)
-        )
-        : [];
-
-    
-    // Delete selected floor and refresh the page
-    const handleDeleteFloor = async () => {
-        if (!selectedDeleteFloor) return;
-
-        try {
-            setIsDeletingFloor(true);
-
-            // Delete floor from backend
-            await deleteFloor(selectedDeleteFloor.id);
-
-            // Refresh active floors
-            const floorsData = await getFloorsByBuildingId(
-                Number(buildingId)
-            );
-
-            setFloors(floorsData);
-
-            // If the deleted floor was selected, select another floor
-            if (selectedFloorId === selectedDeleteFloor.id) {
-                if (floorsData.length > 0) {
-                    setSelectedFloorId(floorsData[0].id);
-                } else {
-                    setSelectedFloorId(null);
-                    setRooms([]);
-                }
-            }
-
-            // Refresh pending rent data
-            const dueRentsData = await getDueMonthlyRentsByBuilding(
-                Number(buildingId)
-            );
-
-            setDueRents(dueRentsData);
-
-            // Close delete popup
-            setShowDeleteFloorModal(false);
-            setSelectedDeleteFloor(null);
-
-        } catch (error: any) {
-            
-        } finally {
-            setIsDeletingFloor(false);
-        }
-    };
-
-        
-    return (
-        <SafeAreaView
-            edges={["top"]}
-            style={{ flex: 1, backgroundColor: "#F8FAFC" }}
-        >
-            <View style={styles.container}>
+        return (
+            <SafeAreaView
+                edges={["top","bottom"]}
+                style={{ flex: 1, backgroundColor: "#F8FAFC" }}
+            >       
                 
-                <View style={styles.content}>
+                {/* Compact floating Move Tenant banner */}
+                {moveSession && (
+                    <View
+                        style={[
+                            styles.moveTenantBanner,
+                            { top: insets.top + 8 },
+                        ]}
+                    >
 
-                    {/* building name */}
-                    <View style={styles.buildingHeader}>
-                        <Ionicons
-                            name="business-outline"
-                            size={24}
-                            color="#172554"
-                        />
-
-                        <Text
-                            style={styles.buildingName}
-                            numberOfLines={1}
-                            ellipsizeMode="tail"
-                        >
-                            {buildingName}
-                        </Text>
-                    </View>
-
-
-                    {/* Rent summary cards */}
-                    <View style={styles.summaryCardsRow}>
-
-                        {/* Rent collected */}
-                        <View style={styles.collectedRentCard}>
-                            <Text style={styles.summaryCardTitle}>
-                                Rent Collected
+                        {/* Tenant information on the left */}
+                        <View style={styles.moveTenantInfo}>
+                            <Text
+                                style={styles.moveTenantTitle}
+                                numberOfLines={1}
+                            >
+                                {moveSession.tenantName}
                             </Text>
 
-                            <View style={styles.summaryCardContent}>
-                                <View style={styles.collectedIconBox}>
-                                    <Ionicons
-                                        name="cash-outline"
-                                        size={19}
-                                        color="#15803D"
-                                    />
-                                </View>
-
-                                <View style={styles.summaryAmountBox}>
-                                    {loadingCollection ? (
-                                        <Animated.View
-                                            style={[
-                                                styles.summaryAmountSkeleton,
-                                                { opacity: shimmerOpacity },
-                                            ]}
-                                        />
-                                    ) : (
-                                        <Text style={styles.collectedRentAmount}>
-                                            ₹{currentMonthCollection.toLocaleString("en-IN")}
-                                        </Text>
-                                    )}
-
-                                    <Text style={styles.summaryCardSubtext}>
-                                        {currentMonthName}
-                                    </Text>
-                                </View>
-                            </View>
+                            <Text
+                                style={styles.moveTenantSubtitle}
+                                numberOfLines={2}
+                            >
+                                {moveSession.destinationBedId !== null
+                                    ? `Room ${moveSession.destinationRoomNumber} • Bed ${moveSession.destinationBedNumber}`
+                                    : "Select an available bed"}
+                            </Text>
                         </View>
 
-                        {/* Pending rent */}
-                        <Pressable
-                            style={styles.pendingRentCard}
-                            onPress={() => {
-                                router.push({
-                                    pathname: "/monthly_rents/[buildingId]",
-                                    params: {
-                                        buildingId: buildingId.toString(),
-                                        buildingName: buildingName.toString(),
-                                    },
-                                });
-                            }}
-                        >
-                            <Text style={styles.summaryCardTitle}>
-                                Pending Rent
-                            </Text>
-
-                            <View style={styles.summaryCardContent}>
-                                <View style={styles.summaryIconBox}>
-                                    <Ionicons
-                                        name="wallet-outline"
-                                        size={19}
-                                        color="#EF4444"
-                                    />
-                                </View>
-
-                                <View style={styles.summaryAmountBox}>
-                                    <Text style={styles.pendingRentAmount}>
-                                        ₹{totalDue.toLocaleString("en-IN")}
-                                    </Text>
-
-                                    <Text style={styles.summaryCardSubtext}>
-                                        {dueRents.length} payments
-                                    </Text>
-                                </View>
-                            </View>
-                        </Pressable>
-
-                    </View>
-
-
-                    <View style={styles.floorSection}>
-                        <View style={styles.floorHeader}>
-                            <Text style={styles.floorTitle}>Floors</Text>
+                        {/* Cancel and Move buttons on the right */}
+                        <View style={styles.moveTenantActions}>
 
                             <Pressable
-                                style={styles.addFloorButton}
-                                onPress={() => {
-                                    setFloorError("");
-                                    setSelectedFloorNumber(null);
-                                    setShowAddFloorModal(true);
+                                style={styles.moveTenantCancelButton}
+                                onPress={cancelMoveTenant}
+                            >
+                                <Text style={styles.moveTenantCancelText}>
+                                    Cancel
+                                </Text>
+                            </Pressable>
+
+                            <Pressable
+                                style={[
+                                    styles.moveTenantSaveButton,
+                                    moveSession.destinationBedId === null && {
+                                        opacity: 0.5,
+                                    },
+                                ]}
+                                disabled={moveSession.destinationBedId === null}
+                                onPress={async () => {
+                                    // Stop if no destination bed has been selected.
+                                    if (!moveSession || moveSession.destinationBedId === null) {
+                                        return;
+                                    }
+
+                                    try {
+                                        // Send the tenant move request to the backend.
+                                        await moveTenant(
+                                            moveSession.tenantId,
+                                            moveSession.destinationBedId
+                                        );
+
+                                        // Clear the active Move Tenant session.
+                                        completeMoveTenant();
+
+                                        // Show success feedback.
+                                        Alert.alert(
+                                            "Success",
+                                            "Tenant moved successfully!"
+                                        );
+
+                                        // Refresh the Building page data.
+                                        await refreshBuildingData();
+
+                                    } catch (error) {
+                                        // Log the error for debugging.
+                                        console.error("Failed to move tenant:", error);
+
+                                        // Show an error message.
+                                        Alert.alert(
+                                            "Error",
+                                            "Failed to move tenant. Please try again."
+                                        );
+                                    }
                                 }}
                             >
-                                <Ionicons name="add" size={18} color="#172554" />
-                                <Text style={styles.addFloorButtonText}>Add</Text>
+                                <Text style={styles.moveTenantSaveText}>
+                                    Move
+                                </Text>
                             </Pressable>
+
+                        </View>
+                    </View>
+                )}
+
+
+                <View style={styles.container}>
+                    
+                    <View style={styles.content}>
+
+                        {/* building name */}
+                        <View style={styles.buildingHeader}>
+                            <Ionicons
+                                name="business-outline"
+                                size={24}
+                                color="#172554"
+                            />
+
+                            <Text
+                                style={styles.buildingName}
+                                numberOfLines={1}
+                                ellipsizeMode="tail"
+                            >
+                                {buildingName}
+                            </Text>
                         </View>
 
-                        {loadingFloors ? (
-                            <View style={styles.floorSkeletonRow}>
-                                {[1, 2, 3, 4].map((item) => (
-                                    <Animated.View
-                                        key={item}
-                                        style={[
-                                            styles.floorSkeleton,
-                                            { opacity: shimmerOpacity },
-                                        ]}
-                                    />
-                                ))}
-                            </View>
-                        ) : (
-                            <FlatList
-                                data={floors}
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                keyExtractor={(floor) => floor.id.toString()}
-                                contentContainerStyle={styles.floorList}
-                                renderItem={({ item }) => (
-                                    <Pressable
-                                        style={[
-                                            styles.floorButton,
-                                            selectedFloorId === item.id &&
-                                                styles.selectedFloorButton,
-                                        ]}
-                                        onPress={() => setSelectedFloorId(item.id)}
-                                        onLongPress={() => {
-                                            Haptics.impactAsync(
-                                                Haptics.ImpactFeedbackStyle.Medium
-                                            );
-                                            setSelectedDeleteFloor(item);
-                                            setShowDeleteFloorModal(true);
-                                        }}
-                                    >
-                                        <Text
-                                            style={[
-                                                styles.floorText,
-                                                selectedFloorId === item.id &&
-                                                    styles.selectedFloorText,
-                                            ]}
-                                        >
-                                            {item.floorNumber === 0 ? "G" : item.floorNumber}
-                                        </Text>
-                                    </Pressable>
-                                )}
-                            />
-                        )}
-                    </View>
-                
-                    <View style={styles.roomsContainer}>
-                        <Text style={styles.roomTitle}>Rooms</Text>
 
-                        {loadingRooms ? (
-                            <View style={styles.roomSkeletonContainer}>
-                                {[1, 2, 3, 4].map((item) => (
-                                    <Animated.View
-                                        key={item}
-                                        style={[
-                                            styles.roomSkeleton,
-                                            { opacity: shimmerOpacity },
-                                        ]}
-                                    />
-                                ))}
-                            </View>
-                        ) : (
-                            <FlatList
-                                data={rooms}
-                                keyExtractor={(room) => room.id.toString()}
-                                showsVerticalScrollIndicator={false}
-                                renderItem={({ item }) => (
-                                    <Pressable
-                                        style={styles.roomCard}
-                                        onLongPress={() => {
-                                            Haptics.impactAsync(
-                                                Haptics.ImpactFeedbackStyle.Light
-                                            );
-                                            setSelectedRoom(item);
-                                            setIsRoomDeleteConfirmed(false);
-                                            setShowRoomActions(true);
-                                        }}
-                                        onPress={() => {
-                                            router.push({
-                                                pathname: "/room/[roomId]",
-                                                params: {
-                                                    roomId: item.id.toString(),
-                                                    roomNumber: item.roomNumber.toString(),
-                                                },
-                                            });
-                                        }}
-                                    >
-                                        <View style={styles.roomRow}>
+                        
+                        {/* Rent summary cards */}
+                        <View style={styles.summaryCardsRow}>
 
-                                            <View style={styles.roomNumberWrapper}>
+                            {/* Summary carousel card: PanResponder handles swipe, tap, and hold. */}
+                            <View
+                                style={[
+                                    styles.collectedRentCard,
+                                    summaryCardIndex === 1 && styles.vacatingTenantCard,
+                                ]}
+                                {...summaryCardPanResponder.panHandlers}
+                            >
+                                {/* Animates the content without changing the outer card dimensions. */}
+                                <Animated.View
+                                    style={{
+                                        transform: [
+                                            { translateX: summaryCardTranslateX },
+                                        ],
+                                    }}
+                                >
+                                    {summaryCardIndex === 0 ? (
+                                        // Slide 1: Rent Collected
+                                        <>
+                                            <Text style={styles.summaryCardTitle}>
+                                                Rent Collected
+                                            </Text>
 
-                                                <View style={styles.roomNumberBox}>
-                                                    <Text style={styles.roomNumber}>
-                                                        {item.roomNumber}
-                                                    </Text>
+                                            <View style={styles.summaryCardContent}>
+                                                <View style={styles.collectedIconBox}>
+                                                    <Ionicons
+                                                        name="cash-outline"
+                                                        size={19}
+                                                        color="#15803D"
+                                                    />
                                                 </View>
 
-                                                {item.unpaidTenants > 0 && (
-                                                    <View style={styles.unpaidBadge}>
-                                                        <Text style={styles.unpaidBadgeText}>
-                                                            {item.unpaidTenants}
+                                                <View style={styles.summaryAmountBox}>
+                                                    {loadingCollection ? (
+                                                        <Animated.View
+                                                            style={[
+                                                                styles.summaryAmountSkeleton,
+                                                                { opacity: shimmerOpacity },
+                                                            ]}
+                                                        />
+                                                    ) : (
+                                                        <Text style={styles.collectedRentAmount}>
+                                                            ₹{currentMonthCollection.toLocaleString("en-IN")}
                                                         </Text>
-                                                    </View>
-                                                )}
+                                                    )}
 
+                                                    <Text style={styles.summaryCardSubtext}>
+                                                        {currentMonthName}
+                                                    </Text>
+                                                </View>
                                             </View>
-
-                                            <Text style={styles.bedCount}>
-                                                {item.totalBeds} / {item.occupiedBeds} occupied
+                                        </>
+                                    ) : (
+                                        // Slide 2: Vacating Tenants
+                                        <>
+                                            <Text
+                                                style={[
+                                                    styles.summaryCardTitle,
+                                                    styles.vacatingTenantTitle,
+                                                ]}
+                                            >
+                                                Vacating Tenants
                                             </Text>
 
-                                            <Text style={styles.roomArrow}>
-                                                ›
-                                            </Text>
+                                            <View style={styles.summaryCardContent}>
+                                                <View style={styles.vacatingIconBox}>
+                                                    <Ionicons
+                                                        name="calendar-outline"
+                                                        size={19}
+                                                        color="#15803D"
+                                                    />
+                                                </View>
 
-                                        </View>
-                                    </Pressable>
-                                )}
-                            />
-                        )}
+                                                <View style={styles.summaryAmountBox}>
+                                                    <Text style={styles.vacatingTenantAmount}>
+                                                        {vacatingTenantCount}
+                                                    </Text>
 
-                        {/* Delete room pop-up */}
-                        <Modal
-                            visible={showRoomActions}
-                            transparent
-                            animationType="fade"
-                            onRequestClose={() => setShowRoomActions(false)}
-                        >
+                                                    <Text style={styles.summaryCardSubtext}>
+                                                        Marked as vacating
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </>
+                                    )}
+                                </Animated.View>
+                            </View>
+
+                            {/* Pending rent: unchanged */}
                             <Pressable
-                                style={styles.roomActionOverlay}
-                                onPress={() => setShowRoomActions(false)}
+                                style={styles.pendingRentCard}
+                                onPress={() => {
+                                    router.push({
+                                        pathname: "/monthly_rents/[buildingId]",
+                                        params: {
+                                            buildingId: buildingId.toString(),
+                                            buildingName: buildingName.toString(),
+                                        },
+                                    });
+                                }}
                             >
-                                <View style={styles.roomActionPopup}>
+                                <Text style={styles.summaryCardTitle}>
+                                    Pending Rent
+                                </Text>
 
-                                    <Text style={styles.roomActionRoom}>
-                                        Room {selectedRoom?.roomNumber}
-                                    </Text>
+                                <View style={styles.summaryCardContent}>
+                                    <View style={styles.summaryIconBox}>
+                                        <Ionicons
+                                            name="wallet-outline"
+                                            size={19}
+                                            color="#EF4444"
+                                        />
+                                    </View>
 
-                                    <Text style={styles.roomActionDescription}>
-                                        This will delete the room and its beds.
-                                    </Text>
-
-                                    <Pressable
-                                        style={styles.deleteConfirmationRow}
-                                        onPress={() =>
-                                            setIsRoomDeleteConfirmed(
-                                                !isRoomDeleteConfirmed
-                                            )
-                                        }
-                                    >
-                                        <View
-                                            style={[
-                                                styles.deleteCheckbox,
-                                                isRoomDeleteConfirmed &&
-                                                    styles.deleteCheckboxChecked,
-                                            ]}
-                                        >
-                                            {isRoomDeleteConfirmed && (
-                                                <Ionicons
-                                                    name="checkmark"
-                                                    size={12}
-                                                    color="#FFFFFF"
-                                                />
-                                            )}
-                                        </View>
-
-                                        <Text style={styles.deleteConfirmationText}>
-                                            I understand and want to delete this room
+                                    <View style={styles.summaryAmountBox}>
+                                        <Text style={styles.pendingRentAmount}>
+                                            ₹{animatedTotalDue.toLocaleString("en-IN")}
                                         </Text>
-                                    </Pressable>
 
-                                    <View style={styles.roomActionButtons}>
-                                        <Pressable
-                                            style={styles.roomCancelButton}
-                                            onPress={() => {
-                                                setShowRoomActions(false);
-                                                setIsRoomDeleteConfirmed(false);
-                                            }}
-                                        >
-                                            <Text style={styles.roomCancelButtonText}>
-                                                Cancel
-                                            </Text>
-                                        </Pressable>
-
-                                        <Pressable
-                                            style={[
-                                                styles.roomDeleteButton,
-                                                (!isRoomDeleteConfirmed || isDeletingRoom) &&
-                                                    styles.roomDeleteButtonDisabled,
-                                            ]}
-                                            disabled={!isRoomDeleteConfirmed || isDeletingRoom}
-                                            onPress={async () => {
-                                                if (!selectedRoom) return;
-
-                                                try {
-                                                    setIsDeletingRoom(true);
-
-                                                    await deleteRoom(selectedRoom.id);
-
-                                                    // Close popup after successful deletion.
-                                                    setShowRoomActions(false);
-                                                    setIsRoomDeleteConfirmed(false);
-
-                                                    // Refresh the current floor's rooms.
-                                                    if (selectedFloorId !== null) {
-                                                        const updatedRooms = await getRoomsByFloorId(
-                                                            selectedFloorId
-                                                        );
-                                                        setRooms(updatedRooms);
-                                                    }
-
-                                                    // Refresh pending rent.
-                                                    const updatedDueRents = await getDueMonthlyRentsByBuilding(
-                                                        Number(buildingId)
-                                                    );
-                                                    setDueRents(updatedDueRents);
-
-                                                } catch (error: any) {
-                                                    console.error("DELETE ROOM ERROR:", error);
-
-                                                    // Show the backend error.
-                                                    setRoomError(
-                                                        error?.message || "Failed to delete room"
-                                                    );
-                                                } finally {
-                                                    setIsDeletingRoom(false);
-                                                }
-                                            }}
-                                        >
-                                            <Text style={styles.roomDeleteButtonText}>
-                                                {isDeletingRoom ? "Deleting..." : "Delete Room"}
-                                            </Text>
-                                        </Pressable>
+                                        <Text style={styles.summaryCardSubtext}>
+                                            {dueRents.length} payments
+                                        </Text>
                                     </View>
                                 </View>
                             </Pressable>
-                        </Modal>
-
-
-                        {/* add room button*/}
-                        <Pressable
-                            style={styles.addRoomButton}
-                            onPress={() => {
-                                setSelectedRoomNumber(null);
-                                setNumberOfBeds(1);
-                                setRoomError("");
-                                setShowAddRoomModal(true);
-                                setRoomNumberLimit(3);
-                            }}
-                        >
-                            <Ionicons name="add" size={20} color="#FFFFFF" />
-                            <Text style={styles.addRoomButtonText}>Add Room</Text>
-                        </Pressable>
-
-                    </View>
-                </View>
-            </View>
-
-
-            {/* Delete Floor Modal */}
-            <Modal
-                visible={showDeleteFloorModal}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowDeleteFloorModal(false)}
-            >
-                <View style={styles.deleteFloorOverlay}>
-                    <View style={styles.deleteFloorModal}>
-
-                        <Text style={styles.modalTitle}>
-                            Delete Floor
-                        </Text>
-
-                        <View style={styles.modalDivider} />
-
-                        <Text style={styles.modalSubtitle}>
-                            Are you sure you want to delete Floor{" "}
-                            {selectedDeleteFloor?.floorNumber === 0
-                                ? "G"
-                                : selectedDeleteFloor?.floorNumber}
-                            ?
-                        </Text>
-
-                        {/* Confirmation checkbox */}
-                        <Pressable
-                            style={styles.deleteFloorCheckRow}
-                            onPress={() =>
-                                setIsDeleteFloorConfirmed(
-                                    !isDeleteFloorConfirmed
-                                )
-                            }
-                        >
-                            <View
-                                style={[
-                                    styles.deleteFloorCheckbox,
-                                    isDeleteFloorConfirmed &&
-                                        styles.deleteFloorCheckboxChecked,
-                                ]}
-                            >
-                                {isDeleteFloorConfirmed && (
-                                    <Text style={styles.deleteFloorCheckmark}>
-                                        ✓
-                                    </Text>
-                                )}
-                            </View>
-
-                            <Text style={styles.deleteFloorCheckText}>
-                                YES
-                            </Text>
-                        </Pressable>
-
-                        <View style={styles.floorModalActions}>
-
-                            <Pressable
-                                style={styles.cancelFloorButton}
-                                onPress={() => {
-                                    setShowDeleteFloorModal(false);
-                                    setSelectedDeleteFloor(null);
-                                    setIsDeleteFloorConfirmed(false);
-                                }}
-                            >
-                                <Text style={styles.cancelFloorButtonText}>
-                                    Cancel
-                                </Text>
-                            </Pressable>
-
-                            <Pressable
-                                style={[
-                                    styles.deleteFloorButton,
-                                    !isDeleteFloorConfirmed &&
-                                        styles.deleteFloorButtonDisabled,
-                                ]}
-                                onPress={handleDeleteFloor}
-                                disabled={
-                                    !isDeleteFloorConfirmed ||
-                                    isDeletingFloor
-                                }
-                            >
-                                <Text style={styles.deleteFloorButtonText}>
-                                    {isDeletingFloor
-                                        ? "Deleting..."
-                                        : "Delete"}
-                                </Text>
-                            </Pressable>
-
                         </View>
 
-                    </View>
-                </View>
-            </Modal>
+                        <View style={styles.floorSection}>
+                            <View style={styles.floorHeader}>
+                                <Text style={styles.floorTitle}>Floors</Text>
 
-            {/* Add Floor Modal */}
-            <Modal
-                visible={showAddFloorModal}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setShowAddFloorModal(false)}
-            >
-                <View style={styles.modalOverlay}>
-
-                    <View style={styles.addFloorModal}>
-
-                        <Text style={styles.modalTitle}>
-                            Add Floor
-                        </Text>
-
-                        <View style={styles.modalDivider} />
-
-                        <Text style={styles.modalSubtitle}>
-                            Select a floor number
-                        </Text>
-
-                        <View style={styles.floorNumberGrid}>
-                            {Array.from({ length: 21 }, (_, index) => (
                                 <Pressable
-                                    key={index}
-                                    style={[
-                                        styles.floorNumberOption,
-
-                                        activeFloorNumbers.includes(index) &&
-                                            styles.disabledFloorNumberOption,
-
-                                        selectedFloorNumber === index &&
-                                            styles.selectedFloorNumberOption,
-                                    ]}
+                                    style={styles.addFloorButton}
                                     onPress={() => {
-                                        if (activeFloorNumbers.includes(index)) {
-                                            return;
-                                        }
-
-                                        setSelectedFloorNumber(index);
                                         setFloorError("");
+                                        setSelectedFloorNumber(null);
+                                        setShowAddFloorModal(true);
                                     }}
                                 >
-                                    <Text
-                                        style={[
-                                            styles.floorNumberOptionText,
-                                            selectedFloorNumber === index &&
-                                                styles.selectedFloorNumberOptionText,
-                                        ]}
-                                    >
-                                        {index === 0 ? "G" : index}
-                                    </Text>
+                                    <Ionicons name="add" size={18} color="#172554" />
+                                    <Text style={styles.addFloorButtonText}>Add</Text>
                                 </Pressable>
-                            ))}
+                            </View>
+
+                            {loadingFloors ? (
+                                <View style={styles.floorSkeletonRow}>
+                                    {[1, 2, 3, 4].map((item) => (
+                                        <Animated.View
+                                            key={item}
+                                            style={[
+                                                styles.floorSkeleton,
+                                                { opacity: shimmerOpacity },
+                                            ]}
+                                        />
+                                    ))}
+                                </View>
+                            ) : (
+                                <FlatList
+                                    data={floors}
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    keyExtractor={(floor) => floor.id.toString()}
+                                    contentContainerStyle={styles.floorList}
+                                    renderItem={({ item }) => (
+                                        <Pressable
+                                            style={[
+                                                styles.floorButton,
+                                                selectedFloorId === item.id &&
+                                                    styles.selectedFloorButton,
+                                            ]}
+                                            onPress={() => setSelectedFloorId(item.id)}
+                                            onLongPress={() => {
+                                                Haptics.impactAsync(
+                                                    Haptics.ImpactFeedbackStyle.Medium
+                                                );
+                                                setSelectedDeleteFloor(item);
+                                                setShowDeleteFloorModal(true);
+                                            }}
+                                        >
+                                            <Text
+                                                style={[
+                                                    styles.floorText,
+                                                    selectedFloorId === item.id &&
+                                                        styles.selectedFloorText,
+                                                ]}
+                                            >
+                                                {item.floorNumber === 0 ? "G" : item.floorNumber}
+                                            </Text>
+                                        </Pressable>
+                                    )}
+                                />
+                            )}
                         </View>
+                    
+                        <View style={styles.roomsContainer}>
+                            <Text style={styles.roomTitle}>Rooms</Text>
 
-                        {floorError !== "" && (
-                            <Text style={styles.floorErrorText}>
-                                {floorError}
-                            </Text>
-                        )}
+                            {loadingRooms ? (
+                                <View style={styles.roomSkeletonContainer}>
+                                    {[1, 2, 3, 4].map((item) => (
+                                        <Animated.View
+                                            key={item}
+                                            style={[
+                                                styles.roomSkeleton,
+                                                { opacity: shimmerOpacity },
+                                            ]}
+                                        />
+                                    ))}
+                                </View>
+                            ) : (
+                                <FlatList
+                                    data={rooms}
+                                    keyExtractor={(room) => room.id.toString()}
+                                    showsVerticalScrollIndicator={false}
+                                    renderItem={({ item }) => (
+                                        <Pressable
+                                            style={styles.roomCard}
+                                            onLongPress={() => {
+                                                Haptics.impactAsync(
+                                                    Haptics.ImpactFeedbackStyle.Light
+                                                );
+                                                setSelectedRoom(item);
+                                                setIsRoomDeleteConfirmed(false);
+                                                setShowRoomActions(true);
+                                            }}
+                                            onPress={() => {
+                                                router.push({
+                                                    pathname: "/room/[roomId]",
+                                                    params: {
+                                                        roomId: item.id.toString(),
+                                                        roomNumber: item.roomNumber.toString(),
+                                                        buildingId: buildingId.toString(),
+                                                    },
+                                                });
+                                            }}
+                                        >
+                                            <View style={styles.roomRow}>
 
-                        <View style={styles.floorModalActions}>
+                                                <View style={styles.roomNumberWrapper}>
 
+                                                    <View style={styles.roomNumberBox}>
+                                                        <Text style={styles.roomNumber}>
+                                                            {item.roomNumber}
+                                                        </Text>
+                                                    </View>
+
+                                                    {item.unpaidTenants > 0 && (
+                                                        <View style={styles.unpaidBadge}>
+                                                            <Text style={styles.unpaidBadgeText}>
+                                                                {item.unpaidTenants}
+                                                            </Text>
+                                                        </View>
+                                                    )}
+
+                                                </View>
+
+                                                <Text style={styles.bedCount}>
+                                                    {item.totalBeds} / {item.occupiedBeds} occupied
+                                                </Text>
+
+                                                <Text style={styles.roomArrow}>
+                                                    ›
+                                                </Text>
+
+                                            </View>
+                                        </Pressable>
+                                    )}
+                                />
+                            )}
+
+                            {/* Delete room pop-up */}
+                            <Modal
+                                visible={showRoomActions}
+                                transparent
+                                animationType="fade"
+                                onRequestClose={() => setShowRoomActions(false)}
+                            >
+                                <Pressable
+                                    style={styles.roomActionOverlay}
+                                    onPress={() => setShowRoomActions(false)}
+                                >
+                                    <View style={styles.roomActionPopup}>
+
+                                        <Text style={styles.roomActionRoom}>
+                                            Room {selectedRoom?.roomNumber}
+                                        </Text>
+
+                                        <Text style={styles.roomActionDescription}>
+                                            This will delete the room and its beds.
+                                        </Text>
+
+                                        <Pressable
+                                            style={styles.deleteConfirmationRow}
+                                            onPress={() =>
+                                                setIsRoomDeleteConfirmed(
+                                                    !isRoomDeleteConfirmed
+                                                )
+                                            }
+                                        >
+                                            <View
+                                                style={[
+                                                    styles.deleteCheckbox,
+                                                    isRoomDeleteConfirmed &&
+                                                        styles.deleteCheckboxChecked,
+                                                ]}
+                                            >
+                                                {isRoomDeleteConfirmed && (
+                                                    <Ionicons
+                                                        name="checkmark"
+                                                        size={12}
+                                                        color="#FFFFFF"
+                                                    />
+                                                )}
+                                            </View>
+
+                                            <Text style={styles.deleteConfirmationText}>
+                                                I understand and want to delete this room
+                                            </Text>
+                                        </Pressable>
+
+                                        <View style={styles.roomActionButtons}>
+                                            <Pressable
+                                                style={styles.roomCancelButton}
+                                                onPress={() => {
+                                                    setShowRoomActions(false);
+                                                    setIsRoomDeleteConfirmed(false);
+                                                }}
+                                            >
+                                                <Text style={styles.roomCancelButtonText}>
+                                                    Cancel
+                                                </Text>
+                                            </Pressable>
+
+                                            <Pressable
+                                                style={[
+                                                    styles.roomDeleteButton,
+                                                    (!isRoomDeleteConfirmed || isDeletingRoom) &&
+                                                        styles.roomDeleteButtonDisabled,
+                                                ]}
+                                                disabled={!isRoomDeleteConfirmed || isDeletingRoom}
+                                                onPress={async () => {
+                                                    if (!selectedRoom) return;
+
+                                                    try {
+                                                        setIsDeletingRoom(true);
+
+                                                        await deleteRoom(selectedRoom.id);
+
+                                                        // Close popup after successful deletion.
+                                                        setShowRoomActions(false);
+                                                        setIsRoomDeleteConfirmed(false);
+
+                                                        // Refresh the current floor's rooms.
+                                                        if (selectedFloorId !== null) {
+                                                            const updatedRooms = await getRoomsByFloorId(
+                                                                selectedFloorId
+                                                            );
+                                                            setRooms(updatedRooms);
+                                                        }
+
+                                                        // Refresh pending rent.
+                                                        const updatedDueRents = await getDueMonthlyRentsByBuilding(
+                                                            Number(buildingId)
+                                                        );
+                                                        setDueRents(updatedDueRents);
+
+                                                    } catch (error: any) {
+                                                        console.error("DELETE ROOM ERROR:", error);
+
+                                                        // Show the backend error.
+                                                        setRoomError(
+                                                            error?.message || "Failed to delete room"
+                                                        );
+                                                    } finally {
+                                                        setIsDeletingRoom(false);
+                                                    }
+                                                }}
+                                            >
+                                                <Text style={styles.roomDeleteButtonText}>
+                                                    {isDeletingRoom ? "Deleting..." : "Delete Room"}
+                                                </Text>
+                                            </Pressable>
+                                        </View>
+                                    </View>
+                                </Pressable>
+                            </Modal>
+
+
+                            {/* add room button*/}
                             <Pressable
-                                style={styles.cancelFloorButton}
+                                style={styles.addRoomButton}
                                 onPress={() => {
-                                    setShowAddFloorModal(false);
-                                    setSelectedFloorNumber(null);
-                                    setFloorError("");
+                                    setSelectedRoomNumber(null);
+                                    setNumberOfBeds(1);
+                                    setRoomError("");
+                                    setShowAddRoomModal(true);
+                                    setRoomNumberLimit(3);
                                 }}
-                                disabled={isAddingFloor}
                             >
-                                <Text style={styles.cancelFloorButtonText}>
-                                    Cancel
-                                </Text>
-                            </Pressable>
-
-                            <Pressable
-                                style={styles.createFloorButton}
-                                onPress={async () => {
-                                    if (selectedFloorNumber === null) {
-                                        setFloorError("Please select a floor.");
-                                        return;
-                                    }
-
-                                    try {
-                                        setIsAddingFloor(true);
-                                        setFloorError("");
-
-                                        await addFloor(
-                                            Number(buildingId),
-                                            selectedFloorNumber
-                                        );
-
-                                        const updatedFloors =
-                                            await getFloorsByBuildingId(
-                                                Number(buildingId)
-                                            );
-
-                                        setFloors(updatedFloors);
-
-                                        const newFloor = updatedFloors.find(
-                                            (floor: any) =>
-                                                floor.floorNumber === selectedFloorNumber
-                                        );
-
-                                        if (newFloor) {
-                                            setSelectedFloorId(newFloor.id);
-                                        }
-
-                                        setShowAddFloorModal(false);
-                                        setSelectedFloorNumber(null);
-
-                                    } catch (error: any) {
-                                        setFloorError(
-                                            error?.message ||
-                                            "Failed to add floor."
-                                        );
-                                    } finally {
-                                        setIsAddingFloor(false);
-                                    }
-                                }}
-                                disabled={isAddingFloor}
-                            >
-                                <Text style={styles.createFloorButtonText}>
-                                    {isAddingFloor ? "Adding..." : "Add Floor"}
-                                </Text>
+                                <Ionicons name="add" size={20} color="#FFFFFF" />
+                                <Text style={styles.addRoomButtonText}>Add Room</Text>
                             </Pressable>
 
                         </View>
-
                     </View>
                 </View>
-            </Modal>
 
-            {/* Add Room Modal */}
-            <Modal
-                visible={showAddRoomModal}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setShowAddRoomModal(false)}
-            >
-                <View style={styles.modalOverlay}>
 
-                    {/* Modal content */}
-                    <View style={styles.addRoomModal}>
+                {/* Delete Floor Modal */}
+                <Modal
+                    visible={showDeleteFloorModal}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setShowDeleteFloorModal(false)}
+                >
+                    <View style={styles.deleteFloorOverlay}>
+                        <View style={styles.deleteFloorModal}>
 
-                        {/* Modal title */}
-                        <Text style={styles.modalTitle}>
-                            Add Room
-                        </Text>
+                            <Text style={styles.modalTitle}>
+                                Delete Floor
+                            </Text>
 
-                        <View style={styles.modalDivider} />
+                            <View style={styles.modalDivider} />
 
-                        {/* Room number instruction */}
-                        <Text style={styles.modalSubtitle}>
-                            Select a room number
-                        </Text>
+                            <Text style={styles.modalSubtitle}>
+                                Are you sure you want to delete Floor{" "}
+                                {selectedDeleteFloor?.floorNumber === 0
+                                    ? "G"
+                                    : selectedDeleteFloor?.floorNumber}
+                                ?
+                            </Text>
 
-                        {/* Available room numbers */}
-                        <ScrollView
-                            style={styles.roomNumberList}
-                            showsVerticalScrollIndicator={false}
-                        >
-                            <View style={styles.roomNumberGrid}>
+                            {/* Confirmation checkbox */}
+                            <Pressable
+                                style={styles.deleteFloorCheckRow}
+                                onPress={() =>
+                                    setIsDeleteFloorConfirmed(
+                                        !isDeleteFloorConfirmed
+                                    )
+                                }
+                            >
+                                <View
+                                    style={[
+                                        styles.deleteFloorCheckbox,
+                                        isDeleteFloorConfirmed &&
+                                            styles.deleteFloorCheckboxChecked,
+                                    ]}
+                                >
+                                    {isDeleteFloorConfirmed && (
+                                        <Text style={styles.deleteFloorCheckmark}>
+                                            ✓
+                                        </Text>
+                                    )}
+                                </View>
 
-                                {availableRoomNumbers
-                                    .slice(0, roomNumberLimit)
-                                    .map((roomNumber) => (
+                                <Text style={styles.deleteFloorCheckText}>
+                                    YES
+                                </Text>
+                            </Pressable>
+
+                            <View style={styles.floorModalActions}>
+
+                                <Pressable
+                                    style={styles.cancelFloorButton}
+                                    onPress={() => {
+                                        setShowDeleteFloorModal(false);
+                                        setSelectedDeleteFloor(null);
+                                        setIsDeleteFloorConfirmed(false);
+                                    }}
+                                >
+                                    <Text style={styles.cancelFloorButtonText}>
+                                        Cancel
+                                    </Text>
+                                </Pressable>
+
+                                <Pressable
+                                    style={[
+                                        styles.deleteFloorButton,
+                                        !isDeleteFloorConfirmed &&
+                                            styles.deleteFloorButtonDisabled,
+                                    ]}
+                                    onPress={handleDeleteFloor}
+                                    disabled={
+                                        !isDeleteFloorConfirmed ||
+                                        isDeletingFloor
+                                    }
+                                >
+                                    <Text style={styles.deleteFloorButtonText}>
+                                        {isDeletingFloor
+                                            ? "Deleting..."
+                                            : "Delete"}
+                                    </Text>
+                                </Pressable>
+
+                            </View>
+
+                        </View>
+                    </View>
+                </Modal>
+
+                {/* Add Floor Modal */}
+                <Modal
+                    visible={showAddFloorModal}
+                    transparent
+                    animationType="slide"
+                    onRequestClose={() => setShowAddFloorModal(false)}
+                >
+                    <View
+                        style={[
+                            styles.modalOverlay,
+                            {
+                                paddingBottom: Math.max(insets.bottom, 20),
+                            },
+                        ]}
+                    >
+
+                        <View style={styles.addFloorModal}>
+
+                            <Text style={styles.modalTitle}>
+                                Add Floor
+                            </Text>
+
+                            <View style={styles.modalDivider} />
+
+                            <Text style={styles.modalSubtitle}>
+                                Select a floor number
+                            </Text>
+
+                            <View style={styles.floorNumberGrid}>
+                                {Array.from({ length: 21 }, (_, index) => (
                                     <Pressable
-                                        key={roomNumber}
+                                        key={index}
                                         style={[
-                                            styles.roomNumberOption,
-                                            selectedRoomNumber === roomNumber &&
-                                                styles.selectedRoomNumberOption,
+                                            styles.floorNumberOption,
+
+                                            activeFloorNumbers.includes(index) &&
+                                                styles.disabledFloorNumberOption,
+
+                                            selectedFloorNumber === index &&
+                                                styles.selectedFloorNumberOption,
                                         ]}
                                         onPress={() => {
-                                            setSelectedRoomNumber(roomNumber);
-                                            setRoomError("");
+                                            if (activeFloorNumbers.includes(index)) {
+                                                return;
+                                            }
+
+                                            setSelectedFloorNumber(index);
+                                            setFloorError("");
                                         }}
                                     >
                                         <Text
                                             style={[
-                                                styles.roomNumberOptionText,
-                                                selectedRoomNumber === roomNumber &&
-                                                    styles.selectedRoomNumberOptionText,
+                                                styles.floorNumberOptionText,
+                                                selectedFloorNumber === index &&
+                                                    styles.selectedFloorNumberOptionText,
                                             ]}
                                         >
-                                            {roomNumber}
+                                            {index === 0 ? "G" : index}
                                         </Text>
                                     </Pressable>
                                 ))}
+                            </View>
+
+                            {floorError !== "" && (
+                                <Text style={styles.floorErrorText}>
+                                    {floorError}
+                                </Text>
+                            )}
+
+                            <View style={styles.floorModalActions}>
+
+                                <Pressable
+                                    style={styles.cancelFloorButton}
+                                    onPress={() => {
+                                        setShowAddFloorModal(false);
+                                        setSelectedFloorNumber(null);
+                                        setFloorError("");
+                                    }}
+                                    disabled={isAddingFloor}
+                                >
+                                    <Text style={styles.cancelFloorButtonText}>
+                                        Cancel
+                                    </Text>
+                                </Pressable>
+
+                                <Pressable
+                                    style={styles.createFloorButton}
+                                    onPress={async () => {
+                                        if (selectedFloorNumber === null) {
+                                            setFloorError("Please select a floor.");
+                                            return;
+                                        }
+
+                                        try {
+                                            setIsAddingFloor(true);
+                                            setFloorError("");
+
+                                            await addFloor(
+                                                Number(buildingId),
+                                                selectedFloorNumber
+                                            );
+
+                                            const updatedFloors =
+                                                await getFloorsByBuildingId(
+                                                    Number(buildingId)
+                                                );
+
+                                            setFloors(updatedFloors);
+
+                                            const newFloor = updatedFloors.find(
+                                                (floor: any) =>
+                                                    floor.floorNumber === selectedFloorNumber
+                                            );
+
+                                            if (newFloor) {
+                                                setSelectedFloorId(newFloor.id);
+                                            }
+
+                                            setShowAddFloorModal(false);
+                                            setSelectedFloorNumber(null);
+
+                                        } catch (error: any) {
+                                            setFloorError(
+                                                error?.message ||
+                                                "Failed to add floor."
+                                            );
+                                        } finally {
+                                            setIsAddingFloor(false);
+                                        }
+                                    }}
+                                    disabled={isAddingFloor}
+                                >
+                                    <Text style={styles.createFloorButtonText}>
+                                        {isAddingFloor ? "Adding..." : "Add Floor"}
+                                    </Text>
+                                </Pressable>
 
                             </View>
 
-                            {/* Show more room numbers */}
-                            {roomNumberLimit < availableRoomNumbers.length && (
+                        </View>
+                    </View>
+                </Modal>
+
+                {/* Add Room Modal */}
+                <Modal
+                    visible={showAddRoomModal}
+                    transparent
+                    animationType="slide"
+                    onRequestClose={() => setShowAddRoomModal(false)}
+                >
+                    <View
+                        style={[
+                            styles.modalOverlay,
+                            {
+                                // Keep the modal content above the Android navigation bar.
+                                paddingBottom: Math.max(insets.bottom, 20),
+                            },
+                        ]}
+                    >
+
+                        {/* Modal content */}
+                        <View style={styles.addRoomModal}>
+
+                            {/* Modal title */}
+                            <Text style={styles.modalTitle}>
+                                Add Room
+                            </Text>
+
+                            <View style={styles.modalDivider} />
+
+                            {/* Room number instruction */}
+                            <Text style={styles.modalSubtitle}>
+                                Select a room number
+                            </Text>
+
+                            {/* Available room numbers */}
+                            <ScrollView
+                                style={styles.roomNumberList}
+                                showsVerticalScrollIndicator={false}
+                            >
+                                <View style={styles.roomNumberGrid}>
+
+                                    {availableRoomNumbers
+                                        .slice(0, roomNumberLimit)
+                                        .map((roomNumber) => (
+                                        <Pressable
+                                            key={roomNumber}
+                                            style={[
+                                                styles.roomNumberOption,
+                                                selectedRoomNumber === roomNumber &&
+                                                    styles.selectedRoomNumberOption,
+                                            ]}
+                                            onPress={() => {
+                                                setSelectedRoomNumber(roomNumber);
+                                                setRoomError("");
+                                            }}
+                                        >
+                                            <Text
+                                                style={[
+                                                    styles.roomNumberOptionText,
+                                                    selectedRoomNumber === roomNumber &&
+                                                        styles.selectedRoomNumberOptionText,
+                                                ]}
+                                            >
+                                                {roomNumber}
+                                            </Text>
+                                        </Pressable>
+                                    ))}
+
+                                </View>
+
+                                {/* Show more room numbers */}
+                                {roomNumberLimit < availableRoomNumbers.length && (
+                                    <Pressable
+                                        style={styles.showMoreButton}
+                                        onPress={() => {
+                                            setRoomNumberLimit(
+                                                Math.min(
+                                                    roomNumberLimit + 3,
+                                                    availableRoomNumbers.length
+                                                )
+                                            );
+                                        }}
+                                    >
+                                        <Text style={styles.showMoreText}>
+                                            Show More
+                                        </Text>
+                                    </Pressable>
+                                )}
+                            </ScrollView>
+
+                            {/* Number of beds */}
+                            <Text style={styles.bedsLabel}>
+                                Number of Beds
+                            </Text>
+
+                            <View style={styles.bedSelector}>
+
+                                {/* Decrease beds */}
                                 <Pressable
-                                    style={styles.showMoreButton}
+                                    style={styles.bedSelectorButton}
                                     onPress={() => {
-                                        setRoomNumberLimit(
-                                            Math.min(
-                                                roomNumberLimit + 3,
-                                                availableRoomNumbers.length
-                                            )
-                                        );
+                                        if (numberOfBeds > 1) {
+                                            setNumberOfBeds(numberOfBeds - 1);
+                                        }
                                     }}
                                 >
-                                    <Text style={styles.showMoreText}>
-                                        Show More
+                                    <Ionicons
+                                        name="remove"
+                                        size={20}
+                                        color="#172554"
+                                    />
+                                </Pressable>
+
+                                {/* Bed count */}
+                                <Text style={styles.bedCountValue}>
+                                    {numberOfBeds}
+                                </Text>
+
+                                {/* Increase beds */}
+                                <Pressable
+                                    style={styles.bedSelectorButton}
+                                    onPress={() => {
+                                        if (numberOfBeds < 26) {
+                                            setNumberOfBeds(numberOfBeds + 1);
+                                        }
+                                    }}
+                                >
+                                    <Ionicons
+                                        name="add"
+                                        size={20}
+                                        color="#172554"
+                                    />
+                                </Pressable>
+
+                            </View>
+
+                            {roomError !== "" && (
+                                <Text style={styles.roomErrorText}>
+                                    {roomError}
+                                </Text>
+                            )}
+
+                            {/* Modal actions */}
+                            <View style={styles.roomModalActions}>
+
+                                <Pressable
+                                    style={styles.cancelRoomButton}
+                                    onPress={() => setShowAddRoomModal(false)}
+                                    disabled={isAddingRoom}
+                                >
+                                    <Text style={styles.cancelRoomButtonText}>
+                                        Cancel
                                     </Text>
                                 </Pressable>
-                            )}
-                        </ScrollView>
 
-                        {/* Number of beds */}
-                        <Text style={styles.bedsLabel}>
-                            Number of Beds
-                        </Text>
+                                <Pressable
+                                    style={styles.createRoomButton}
+                                    onPress={async () => {
+                                        if (!selectedFloorId || !selectedRoomNumber) {
+                                            setRoomError("Please select a room number.");
+                                            return;
+                                        }
 
-                        <View style={styles.bedSelector}>
+                                        try {
+                                            setIsAddingRoom(true);
+                                            setRoomError("");
 
-                            {/* Decrease beds */}
-                            <Pressable
-                                style={styles.bedSelectorButton}
-                                onPress={() => {
-                                    if (numberOfBeds > 1) {
-                                        setNumberOfBeds(numberOfBeds - 1);
-                                    }
-                                }}
-                            >
-                                <Ionicons
-                                    name="remove"
-                                    size={20}
-                                    color="#172554"
-                                />
-                            </Pressable>
+                                            await addRoom({
+                                                floor_id: selectedFloorId,
+                                                room_number: selectedRoomNumber,
+                                                number_of_beds: numberOfBeds,
+                                            });
 
-                            {/* Bed count */}
-                            <Text style={styles.bedCountValue}>
-                                {numberOfBeds}
-                            </Text>
+                                            // Refresh rooms after successful creation.
+                                            const updatedRooms = await getRoomsByFloorId(
+                                                selectedFloorId
+                                            );
+                                            setRooms(updatedRooms);
 
-                            {/* Increase beds */}
-                            <Pressable
-                                style={styles.bedSelectorButton}
-                                onPress={() => {
-                                    if (numberOfBeds < 26) {
-                                        setNumberOfBeds(numberOfBeds + 1);
-                                    }
-                                }}
-                            >
-                                <Ionicons
-                                    name="add"
-                                    size={20}
-                                    color="#172554"
-                                />
-                            </Pressable>
+                                            // Close and reset the modal.
+                                            setShowAddRoomModal(false);
+                                            setSelectedRoomNumber(null);
+                                            setNumberOfBeds(1);
+                                            setRoomNumberLimit(3);
+
+                                        } catch (error: any) {
+                                            setRoomError(
+                                                error?.message || "Failed to create room."
+                                            );
+                                        } finally {
+                                            setIsAddingRoom(false);
+                                        }
+                                    }}
+                                    disabled={isAddingRoom}
+                                >
+                                    <Text style={styles.createRoomButtonText}>
+                                        {isAddingRoom ? "Creating..." : "Create Room"}
+                                    </Text>
+                                </Pressable>
+                            </View>
 
                         </View>
-
-                        {roomError !== "" && (
-                            <Text style={styles.roomErrorText}>
-                                {roomError}
-                            </Text>
-                        )}
-
-                        {/* Modal actions */}
-                        <View style={styles.roomModalActions}>
-
-                            <Pressable
-                                style={styles.cancelRoomButton}
-                                onPress={() => setShowAddRoomModal(false)}
-                                disabled={isAddingRoom}
-                            >
-                                <Text style={styles.cancelRoomButtonText}>
-                                    Cancel
-                                </Text>
-                            </Pressable>
-
-                            <Pressable
-                                style={styles.createRoomButton}
-                                onPress={async () => {
-                                    if (!selectedFloorId || !selectedRoomNumber) {
-                                        setRoomError("Please select a room number.");
-                                        return;
-                                    }
-
-                                    try {
-                                        setIsAddingRoom(true);
-                                        setRoomError("");
-
-                                        await addRoom({
-                                            floor_id: selectedFloorId,
-                                            room_number: selectedRoomNumber,
-                                            number_of_beds: numberOfBeds,
-                                        });
-
-                                        // Refresh rooms after successful creation.
-                                        const updatedRooms = await getRoomsByFloorId(
-                                            selectedFloorId
-                                        );
-                                        setRooms(updatedRooms);
-
-                                        // Close and reset the modal.
-                                        setShowAddRoomModal(false);
-                                        setSelectedRoomNumber(null);
-                                        setNumberOfBeds(1);
-                                        setRoomNumberLimit(3);
-
-                                    } catch (error: any) {
-                                        setRoomError(
-                                            error?.message || "Failed to create room."
-                                        );
-                                    } finally {
-                                        setIsAddingRoom(false);
-                                    }
-                                }}
-                                disabled={isAddingRoom}
-                            >
-                                <Text style={styles.createRoomButtonText}>
-                                    {isAddingRoom ? "Creating..." : "Create Room"}
-                                </Text>
-                            </Pressable>
-                        </View>
-
                     </View>
-                </View>
-            </Modal>
+                </Modal>
 
-        </SafeAreaView>
-    );
+            </SafeAreaView>
+        );
 }
 
 
@@ -1137,8 +1510,8 @@ const styles = StyleSheet.create({
     content: {
         flex: 1,
         paddingHorizontal: 16,
-        paddingTop: 16,
-        paddingBottom: 20,
+        paddingTop: 10,
+        paddingBottom: 8,
         backgroundColor: "#F8FAFC",
     },
 
@@ -1415,8 +1788,10 @@ const styles = StyleSheet.create({
 
     roomsContainer: {
         flex: 1,
-        marginTop: 20,
-        padding: 16,
+        marginTop: 10,
+        paddingHorizontal: 16,
+        paddingTop: 10,
+        paddingBottom: 10,
         borderRadius: 16,
         backgroundColor: "#EEF2F7",
     },
@@ -1428,7 +1803,7 @@ const styles = StyleSheet.create({
     roomTitle: {
         fontSize: 18,
         fontWeight: "600",
-        marginBottom: 12,
+        marginBottom: 5,
     },
 
     roomCard: {
@@ -1626,13 +2001,12 @@ const styles = StyleSheet.create({
     // ==================================================
     // 8. Add Room modal
     // ==================================================
-
     addRoomButton: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
         paddingVertical: 13,
-        marginTop: 10,
+        marginTop: 5,
         borderRadius: 10,
         backgroundColor: "#172554",
     },
@@ -1830,15 +2204,61 @@ const styles = StyleSheet.create({
         borderColor: "#FDE2E2",
     },
 
+    // Vacating tennat card 
+    vacatingTenantCard: {
+        backgroundColor: "#f0f0e2",
+        borderColor: "#C9C9A6",
+    },
+
+    // Title color for the Vacating Tenants card.
+    vacatingTenantTitle: {
+        color: "#65653B",
+    },
+
+    // Icon background for Vacating Tenants.
+    vacatingIconBox: {
+        width: 38,
+        height: 38,
+        borderRadius: 10,
+        backgroundColor: "#FFEDD5",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+
+    // Number of tenants marked as vacating.
+    vacatingTenantAmount: {
+        fontSize: 17,
+        fontWeight: "700",
+        color: "#65653B",
+    },
+
+
     collectedRentCard: {
         flex: 1,
         height: 88,
         padding: 10,
         borderRadius: 14,
-        backgroundColor: "#F0FDF4",
+        backgroundColor: "#E8F0E6",
         borderWidth: 1,
-        borderColor: "#b7efcb",
+        borderColor: "#C7D8C2",
+        overflow: "hidden",
     },
+
+    collectedIconBox: {
+        width: 38,
+        height: 38,
+        borderRadius: 10,
+        backgroundColor: "#D5E4D0",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+
+    collectedRentAmount: {
+        fontSize: 17,
+        fontWeight: "700",
+        color: "#3F6345",
+    },
+
 
     summaryCardTitle: {
         fontSize: 13,
@@ -1861,15 +2281,6 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
 
-    collectedIconBox: {
-        width: 38,
-        height: 38,
-        borderRadius: 10,
-        backgroundColor: "#DCFCE7",
-        justifyContent: "center",
-        alignItems: "center",
-    },
-
     summaryAmountBox: {
         marginLeft: 10,
         flex: 1,
@@ -1888,16 +2299,86 @@ const styles = StyleSheet.create({
         color: "#EF4444",
     },
 
-    collectedRentAmount: {
-        fontSize: 17,
-        fontWeight: "700",
-        color: "#15803D",
-    },
-
     summaryCardSubtext: {
         marginTop: 2,
         fontSize: 11,
         color: "#64748B",
     },
+
+    // Compact floating Move Tenant banner
+    moveTenantBanner: {
+        position: "absolute",
+        left: 10,
+        right: 10,
+        zIndex: 1000,
+        elevation: 6,
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#FFFFFF",
+        borderRadius: 25,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderWidth: 1,
+        borderColor: "#d1faf4",
+        shadowColor: "#550e0e",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 4,
+    },
+
+    // Tenant name and destination on the left
+    moveTenantInfo: {
+        flex: 1,
+        minWidth: 0,
+        paddingRight: 8,
+        paddingLeft: 6,
+    },
+
+    moveTenantTitle: {
+        fontSize: 13,
+        fontWeight: "700",
+        color: "#166534",
+    },
+
+    moveTenantSubtitle: {
+        fontSize: 11,
+        color: "#4b5a6e",
+        marginTop: 3,
+    },
+
+    // Buttons stay beside the tenant information
+    moveTenantActions: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+    },
+
+    moveTenantCancelButton: {
+        paddingVertical: 9,
+        paddingHorizontal: 18,
+        borderRadius: 7,
+        backgroundColor: "#F3F4F6",
+    },
+
+    moveTenantCancelText: {
+        color: "#374151",
+        fontSize: 11,
+        fontWeight: "600",
+    },
+
+    moveTenantSaveButton: {
+        paddingVertical: 9,
+        paddingHorizontal: 18,
+        borderRadius: 7,
+        backgroundColor: "#147b89",
+    },
+
+    moveTenantSaveText: {
+        color: "#FFFFFF",
+        fontSize: 11,
+        fontWeight: "700",
+    },
+
+
 
 });

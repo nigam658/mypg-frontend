@@ -54,3 +54,25 @@ export const addBed = async (roomId: number) => {
 
     return data;
 };
+
+
+/**
+ * Fetch empty beds grouped by room for a specific building.
+ * The backend filters out occupied beds, inactive beds,
+ * inactive floors, and inactive or deleted rooms.
+ */
+export const getEmptyBedsByBuildingId = async (buildingId: number) => {
+    const response = await authenticatedFetch(
+        `${API_BASE_URL}/beds/building/${buildingId}/empty`
+    );
+
+    // Read the error response if the request fails.
+    if (!response.ok) {
+        const error = await response.json();
+        throw new Error(
+            error.detail || "Failed to fetch available beds."
+        );
+    }
+
+    return await response.json();
+};

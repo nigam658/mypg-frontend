@@ -11,7 +11,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { API_BASE_URL } from "../config/api";
 
 import PropertyCard from "../components/PropertyCard";
@@ -72,6 +72,7 @@ export default function HomeScreen() {
     const [greeting] = useState(getGreeting());
     const [owner, setOwner] = useState<Owner | null>(null);
     const [showProfile, setShowProfile] = useState(false);
+    const insets = useSafeAreaInsets();
 
     // =========================
     // Logout
@@ -149,7 +150,7 @@ export default function HomeScreen() {
     return (
 
         <SafeAreaView
-            edges={["top"]}
+            edges={["top", "bottom"]}
             style={{ flex: 1, backgroundColor: "#F1F3F5" }}
         >
             <View style={styles.container}>
@@ -211,7 +212,7 @@ export default function HomeScreen() {
 
                     <TextInput
                         style={styles.searchInput}
-                        placeholder="Search room or tenant..."
+                        placeholder="Search service comming soon..."
                         placeholderTextColor="#9A9EA5"
                         value={roomNumber}
                         onChangeText={setRoomNumber}
@@ -341,7 +342,10 @@ export default function HomeScreen() {
                     Floating Create PG Button
                 ========================= */}
                 <Pressable
-                    style={styles.floatingCreateButton}
+                    style={[
+                        styles.floatingCreateButton,
+                        { bottom: insets.bottom + 24 },
+                    ]}
                     onPress={() => {
                         router.push("/create-pg");
                     }}
@@ -670,15 +674,10 @@ const styles = StyleSheet.create({
     // =========================
     floatingCreateButton: {
         position: "absolute",
-
         right: 20,
-        bottom: 24,
-
         backgroundColor: "#071426",
-
         paddingHorizontal: 18,
         paddingVertical: 13,
-
         borderRadius: 14,
 
         elevation: 5,

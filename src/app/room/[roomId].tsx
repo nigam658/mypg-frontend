@@ -1,5 +1,14 @@
+import {
+    cancelMoveTenant,
+    completeMoveTenant,
+    getMoveTenantSession,
+    selectMoveDestination,
+    startMoveTenant,
+    useMoveTenantSession,
+} from "@/services/moveTenantState";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -19,10 +28,10 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets, } from "react-native-safe-area-context";
 
 import { addBed, deleteBed, getBedsByRoomId } from "@/services/bed";
-import { addTenant, getTenantByBedId, removeTenant } from "@/services/tenant";
+import { addTenant, getTenantByBedId, moveTenant, removeTenant, setTenantVacating } from "@/services/tenant";
 
 
 type Bed = {
@@ -36,6 +45,7 @@ type Bed = {
         full_name: string;
         phone: string;
         check_in_date: string;
+        is_vacating: boolean;
     } | null;
 
     payment_status: "PAID" | "UNPAID" | null;
@@ -46,21 +56,19 @@ type Bed = {
 export default function RoomPage() {
 
     // Get room ID from the navigation parameters
-    const { roomId, roomNumber, success } = useLocalSearchParams<{
+    const { roomId, roomNumber,buildingId, success } = useLocalSearchParams<{
         roomId: string;
         roomNumber: string;
+        buildingId: string;
         success?: string;
     }>();
-
+    // Get the device's actual safe areas automatically.
+    const insets = useSafeAreaInsets();
     // Store all beds belonging to this room
     const [beds, setBeds] = useState<Bed[]>([]);
     const [loadingBeds, setLoadingBeds] = useState(true);
     const [openMenuBedId, setOpenMenuBedId] = useState<number | null>(null);
-    const [menuPosition, setMenuPosition] = useState({
-        x: 0,
-        y: 0,
-        height: 0,
-    });
+    const [menuPosition, setMenuPosition] = useState({x: 0, y: 0, height: 0,});
     const [selectedBedId, setSelectedBedId] = useState<number | null>(null);
     const [tenantDetails, setTenantDetails] = useState<any>(null);
     const [tenantLoading, setTenantLoading] = useState(false);
@@ -69,6 +77,42 @@ export default function RoomPage() {
     const [removeTenantVisible, setRemoveTenantVisible] = useState(false);
     const [removingTenant, setRemovingTenant] = useState(false);
     const [tenantToRemove, setTenantToRemove] = useState<number | null>(null);
+
+    // Controls whether the vacating popup is visible.
+    const [vacatingPopupVisible, setVacatingPopupVisible] = useState(false);
+    const [vacatingTenant, setVacatingTenant] = useState<{
+        tenantId: number;
+        bedId: number;
+        tenantName: string;
+        isVacating: boolean;
+        nextRentDate: string;
+    } | null>(null);
+    // Stores the switch's pending value before the owner confirms.
+    const [pendingVacatingStatus, setPendingVacatingStatus] =
+        useState<boolean | null>(null);
+    // Keeps the latest switch value available immediately between taps.
+    const pendingVacatingStatusRef = useRef<boolean | null>(null);
+    // Prevents duplicate API requests while saving.
+    const [updatingVacating, setUpdatingVacating] = useState(false)
+    // Prevents duplicate vacating submissions from rapid taps.
+    const vacatingSubmitLock = useRef(false);
+    // Stores the selected tenant's latest vacating status for the menu.
+    const [menuTenantVacatingStatus, setMenuTenantVacatingStatus] =
+        useState<boolean | null>(null);
+    // Stores the expected checkout date selected by the PG owner.
+    const [expectedCheckoutDate, setExpectedCheckoutDate] =
+        useState<Date | null>(null);
+
+    // Controls whether the expected checkout date picker is visible.
+    const [
+        showExpectedCheckoutDatePicker,
+        setShowExpectedCheckoutDatePicker,
+    ] = useState(false);
+    // Controls the checkout-date validation message.
+    const [checkoutDateError, setCheckoutDateError] = useState(false);
+
+    // Controls the calendar box's horizontal shake animation.
+    const checkoutDateShake = useRef(new Animated.Value(0)).current;
 
     const [addTenantVisible, setAddTenantVisible] = useState(false);
     const [tenantToAddBedId, setTenantToAddBedId] = useState<number | null>(null);
@@ -100,13 +144,71 @@ export default function RoomPage() {
     
     const [addingTenant, setAddingTenant] = useState(false);
     const [addingBed, setAddingBed] = useState(false);
-    // Stores the actual keyboard height when the keyboard is open.
-    // This value will be used only to create extra scrollable space.
     const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+
+
+
+
 
     // Controls the left-to-right shimmer animation
     // used by the bed skeleton loading components.
     const shimmer = useRef(new Animated.Value(0)).current;
+
+    // Controls the smooth sliding animation of the vacating switch.
+    const vacatingSwitchAnimation = useRef(
+        new Animated.Value(0)
+    ).current;
+
+    // Controls the animation when the OK button appears.
+    const vacatingOkAnimation = useRef(
+        new Animated.Value(0)
+    ).current;
+
+    // Controls the smooth appearance and disappearance of the three-dot menu.
+    const actionMenuAnimation = useRef(
+        new Animated.Value(0)
+    ).current;
+
+    
+    // Animate the three-dot menu when it opens.
+    useEffect(() => {
+        // Do nothing when no menu is open.
+        if (openMenuBedId === null) return;
+
+        // Start from the hidden state each time a menu opens.
+        actionMenuAnimation.setValue(0);
+
+        // Smoothly scale the menu into view.
+        Animated.spring(actionMenuAnimation, {
+            toValue: 1,
+            useNativeDriver: true,
+            speed: 22,
+            bounciness: 4,
+        }).start();
+    }, [openMenuBedId, actionMenuAnimation]);
+
+    
+    // Smoothly close the menu, then optionally run an action.
+    const closeActionMenu = (afterClose?: () => void) => {
+        Animated.timing(actionMenuAnimation, {
+            toValue: 0,
+            duration: 160,
+            useNativeDriver: true,
+        }).start(({ finished }) => {
+            // Hide the menu after the animation completes.
+            if (finished) {
+                setOpenMenuBedId(null);
+
+                // Run the selected menu action after closing.
+                afterClose?.();
+            }
+        });
+    };
+
+
+
+
 
     useEffect(() => {
         const animation = Animated.loop(
@@ -136,6 +238,11 @@ export default function RoomPage() {
     });
 
     const router = useRouter();
+
+    // Read the active Move Tenant session.
+    // This allows the room screen to respond to move-session changes.
+    const moveSession = useMoveTenantSession();
+
 
     // Listen for the keyboard opening and closing.
     // We use the keyboard height only to provide extra
@@ -171,6 +278,7 @@ export default function RoomPage() {
         };
     }, []);
 
+
     useEffect(() => {
         if (success) {
             setSuccessMessage(success);
@@ -183,26 +291,33 @@ export default function RoomPage() {
         }
     }, [success]);
 
-    // defult room screen , showing bed informations
-    const fetchBeds = async () => {
-        // Show bed skeleton while fetching bed data
-        setLoadingBeds(true);
+
+
+    // Fetch the latest bed information from the backend.
+    // A silent refresh avoids showing the loading skeleton unnecessarily.
+    const fetchBeds = async (showLoading = true) => {
+        // Show the loading skeleton only when requested.
+        if (showLoading) {
+            setLoadingBeds(true);
+        }
 
         try {
-            const data = await getBedsByRoomId(
-                Number(roomId)
-            );
+            const data = await getBedsByRoomId(Number(roomId));
 
+            // Update beds with the latest tenant and vacating information.
             setBeds(
                 data.filter((bed: any) => bed.status !== "INACTIVE")
             );
         } catch (error) {
+            console.error("Failed to fetch beds:", error);
         } finally {
-            // Hide skeleton after fetching is complete
-            setLoadingBeds(false);
+            // Hide the skeleton only when it was shown.
+            if (showLoading) {
+                setLoadingBeds(false);
+            }
         }
     };
-    
+
 
     useEffect(() => {
 
@@ -219,6 +334,13 @@ export default function RoomPage() {
         try {
             const result = await deleteBed(bedId);
 
+            // Check whether the deleted bed was the selected destination.
+            const currentMoveSession = getMoveTenantSession();
+
+            if (currentMoveSession?.destinationBedId === bedId) {
+                // Clear only the destination; keep Move Tenant mode active.
+                selectMoveDestination(null, null, null);
+            }
 
             await fetchBeds();
 
@@ -246,10 +368,12 @@ export default function RoomPage() {
 
     };
 
+
     const formatAadhaar = (text: string) => {
         const numbers = text.replace(/\D/g, "").slice(0, 12);
         return numbers.replace(/(\d{4})(?=\d)/g, "$1-");
     };
+
 
     // handle handlebed response 
     const handleAddBed = async () => {
@@ -328,9 +452,397 @@ export default function RoomPage() {
     };
 
 
+    // Format the backend date as "13 November", without the year.
+    const formatVacatingDate = (dateValue: string) => {
+        const [year, month, day] = dateValue.split("-").map(Number);
+
+        // Short uppercase month names to save space in the popup.
+        const monthNames = [
+            "JAN", "FEB", "MAR", "APR",
+            "MAY", "JUN", "JUL", "AUG",
+            "SEP", "OCT", "NOV", "DEC",
+        ];
+
+        // Return the original value if the backend date is invalid.
+        if (
+            !year ||
+            !month ||
+            month < 1 ||
+            month > 12 ||
+            !day ||
+            day < 1 ||
+            day > 31
+        ) {
+            return dateValue;
+        }
+
+        return `${day} ${monthNames[month - 1]}`;
+    };
+
+    // Close the popup and discard any unsaved checkout-date selection.
+    const closeVacatingPopup = () => {
+        // Do not close the popup while a save is in progress.
+        if (updatingVacating) return;
+
+        // Close the popup.
+        setVacatingPopupVisible(false);
+        setVacatingTenant(null);
+
+        // Discard the unsaved checkout date when the popup closes.
+        setExpectedCheckoutDate(null);
+
+        // Hide the date picker if it is open.
+        setShowExpectedCheckoutDatePicker(false);
+
+        // Clear the checkout-date validation message.
+        setCheckoutDateError(false);
+
+        // Reset the calendar shake animation.
+        checkoutDateShake.setValue(0);
+
+        // Reset the switch's pending value.
+        pendingVacatingStatusRef.current = null;
+        setPendingVacatingStatus(null);
+
+        // Reset the OK-button animation.
+        vacatingOkAnimation.setValue(0);
+    };
+
+
+    // Toggle the vacating switch ON and OFF.
+    const handleVacatingSwitchToggle = () => {
+        // Stop if tenant data is missing or a save is in progress.
+        if (
+            !vacatingTenant ||
+            pendingVacatingStatus === null ||
+            updatingVacating
+        ) {
+            return;
+        }
+
+        // Use the current React state to reverse the switch.
+        const nextStatus = !pendingVacatingStatus;
+
+        // Keep the ref synchronized with the new value.
+        pendingVacatingStatusRef.current = nextStatus;
+
+        // Update the switch's pending state.
+        setPendingVacatingStatus(nextStatus);
+
+        // Show OK only when the pending value differs from the saved value.
+        const hasChanges = nextStatus !== vacatingTenant.isVacating;
+
+        // Animate the switch and the OK button together.
+        Animated.parallel([
+            Animated.timing(vacatingSwitchAnimation, {
+                toValue: nextStatus ? 1 : 0,
+                duration: 220,
+                useNativeDriver: false,
+            }),
+            Animated.timing(vacatingOkAnimation, {
+                toValue: hasChanges ? 1 : 0,
+                duration: 200,
+                useNativeDriver: false,
+            }),
+        ]).start();
+    };
+
+
+    // Remind the owner to select a checkout date using two vibrations
+    // and two short horizontal shakes of the calendar box.
+    const triggerCheckoutDateReminder = () => {
+        // Show the friendly validation message inside the popup.
+        setCheckoutDateError(true);
+
+        // Define one short left-right shake animation.
+        const shakeOnce = () =>
+            Animated.sequence([
+                Animated.timing(checkoutDateShake, {
+                    toValue: -7,
+                    duration: 35,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(checkoutDateShake, {
+                    toValue: 7,
+                    duration: 70,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(checkoutDateShake, {
+                    toValue: -5,
+                    duration: 70,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(checkoutDateShake, {
+                    toValue: 0,
+                    duration: 35,
+                    useNativeDriver: true,
+                }),
+            ]);
+
+        // Shake twice, with the second shake starting about 500 ms later.
+        Animated.sequence([
+            shakeOnce(),
+            Animated.delay(290),
+            shakeOnce(),
+        ]).start(() => {
+            // Ensure the calendar box returns to its resting position.
+            checkoutDateShake.setValue(0);
+        });
+
+        // Give the phone its first haptic pulse.
+        void Haptics.impactAsync(
+            Haptics.ImpactFeedbackStyle.Medium
+        ).catch(() => {});
+
+        // Give the phone its second haptic pulse after 500 ms.
+        setTimeout(() => {
+            void Haptics.impactAsync(
+                Haptics.ImpactFeedbackStyle.Medium
+            ).catch(() => {});
+        }, 500);
+    };
+
+
+    // Save the changed vacating status to the backend.
+    const handleConfirmVacating = async () => {
+        if (
+            !vacatingTenant ||
+            pendingVacatingStatus === null ||
+            pendingVacatingStatus === vacatingTenant.isVacating ||
+            updatingVacating ||
+            vacatingSubmitLock.current
+        ) {
+            return;
+        }
+
+        const tenant = vacatingTenant;
+        const newStatus = pendingVacatingStatus;
+
+        // Remind the owner when Vacating is ON but no date is selected.
+        if (newStatus === true && !expectedCheckoutDate) {
+            triggerCheckoutDateReminder();
+
+            // Stop before making any backend request.
+            return;
+        }
+
+        // Lock immediately so another tap cannot start a second request.
+        vacatingSubmitLock.current = true;
+
+        try {
+            setUpdatingVacating(true);
+
+            // Convert the selected date to YYYY-MM-DD for the backend.
+            // Use local date values to avoid timezone-related date changes.
+            const checkoutDateString = expectedCheckoutDate
+                ? `${expectedCheckoutDate.getFullYear()}-${String(
+                    expectedCheckoutDate.getMonth() + 1
+                ).padStart(2, "0")}-${String(
+                    expectedCheckoutDate.getDate()
+                ).padStart(2, "0")}`
+                : null;
+
+            // Send the vacating status and expected checkout date together.
+            // When cancelling Vacating, send null to clear the date.
+            await setTenantVacating(
+                tenant.tenantId,
+                newStatus,
+                newStatus ? checkoutDateString : null
+            );
+
+            await fetchBeds(false);
+
+            // Update the menu label to reflect the saved status.
+            setMenuTenantVacatingStatus(newStatus);
+
+            // Close and reset the popup only after a successful save.
+            setVacatingPopupVisible(false);
+            setVacatingTenant(null);
+
+            // Reset the switch's stored value after a successful save.
+            pendingVacatingStatusRef.current = null;
+            setPendingVacatingStatus(null);
+
+            vacatingOkAnimation.setValue(0);
+
+            // Show confirmation to the owner.
+            setSuccessMessage(
+                newStatus
+                    ? `${tenant.tenantName} marked as vacating.`
+                    : `Vacating cancelled for ${tenant.tenantName}.`
+            );
+
+            setTimeout(() => {
+                setSuccessMessage("");
+            }, 4000);
+
+            // Refresh the expanded tenant details if this bed is selected.
+            // A refresh failure must not undo a successful backend update.
+            if (selectedBedId === tenant.bedId) {
+                try {
+                    const refreshedTenant = await getTenantByBedId(
+                        tenant.bedId
+                    );
+
+                    setTenantDetails(refreshedTenant);
+                } catch (refreshError) {
+                    console.error(
+                        "Vacating status saved, but tenant details could not refresh:",
+                        refreshError
+                    );
+                }
+            }
+        } catch (error) {
+            // Keep the popup open so the owner can retry the save.
+            Alert.alert(
+                "Unable to update vacating status",
+                error instanceof Error
+                    ? error.message
+                    : "Please try again."
+            );
+        } finally {
+            // Allow another submission after the current request finishes.
+            vacatingSubmitLock.current = false;
+            setUpdatingVacating(false);
+        }
+    };
+
+    // Smoothly transition the switch track from gray to navy blue.
+    const vacatingSwitchColor = vacatingSwitchAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: ["#9CA3AF", "#0a2255"],
+    });
+
+
+    // Smoothly move the white thumb between OFF and ON positions.
+    const vacatingThumbLeft = vacatingSwitchAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [3, 23],
+    });
+
+    // Animate the OK button upward as it appears.
+    const vacatingOkTranslateY = vacatingOkAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [8, 0],
+    });
+
+
+
+
+
+
+
     // UI 
     return (
-        <SafeAreaView edges={["top"]} style={styles.container}>
+        <SafeAreaView
+            edges={["top", "bottom"]}
+            style={styles.container}
+        >
+    
+                        
+            {/* Compact floating Move Tenant banner */}
+            {moveSession && (
+                <View
+                    style={[
+                        styles.moveTenantBanner,
+                        {
+                            top: insets.top,
+                            marginTop: 6,
+                        },
+                    ]}
+                >
+
+                    {/* Tenant information on the left */}
+                    <View style={styles.moveTenantInfo}>
+                        <Text
+                            style={styles.moveTenantTitle}
+                            numberOfLines={1}
+                        >
+                            {moveSession.tenantName}
+                        </Text>
+
+                        <Text
+                            style={styles.moveTenantSubtitle}
+                            numberOfLines={2}
+                        >
+                            {moveSession.destinationBedId !== null
+                                ? `Room ${moveSession.destinationRoomNumber} • Bed ${moveSession.destinationBedNumber}`
+                                : "Select an available bed"}
+                        </Text>
+                    </View>
+
+                    {/* Action buttons on the right */}
+                    <View style={styles.moveTenantActions}>
+
+                        {/* Cancel the move */}
+                        <Pressable
+                            style={styles.moveTenantCancelButton}
+                            onPress={cancelMoveTenant}
+                        >
+                            <Text style={styles.moveTenantCancelText}>
+                                Cancel
+                            </Text>
+                        </Pressable>
+
+                        {/* Save the move after selecting a destination */}
+                        <Pressable
+                            style={[
+                                styles.moveTenantSaveButton,
+                                moveSession.destinationBedId === null && {
+                                    opacity: 0.5,
+                                },
+                            ]}
+                            disabled={moveSession.destinationBedId === null}
+                            onPress={async () => {
+                                // Stop if no destination bed is selected.
+                                if (moveSession.destinationBedId === null) return;
+
+                                try {
+                                    // Move the tenant through the backend.
+                                    await moveTenant(
+                                        moveSession.tenantId,
+                                        moveSession.destinationBedId
+                                    );
+
+                                    // Clear the move session after success.
+                                    completeMoveTenant();
+
+                                    // Show a success message.
+                                    setSuccessMessage("Tenant moved successfully!");
+
+                                    // Hide the message after 4 seconds.
+                                    setTimeout(() => {
+                                        setSuccessMessage("");
+                                    }, 4000);
+
+                                    // Refresh the room's bed information.
+                                    await fetchBeds();
+
+                                } catch (error) {
+                                    // Log the error if the move fails.
+                                    console.error("Failed to move tenant:", error);
+
+                                    // Show an error message.
+                                    setSuccessMessage(
+                                        "Failed to move tenant. Please try again."
+                                    );
+
+                                    // Hide the message after 4 seconds.
+                                    setTimeout(() => {
+                                        setSuccessMessage("");
+                                    }, 4000);
+                                }
+                            }}
+                        >
+                            <Text style={styles.moveTenantSaveText}>
+                                Move
+                            </Text>
+                        </Pressable>
+
+                    </View>
+                </View>
+            )}
+
 
             {successMessage ? (
                 <View style={styles.successMessage}>
@@ -356,9 +868,25 @@ export default function RoomPage() {
             ) : null}
 
 
-            <Text style={styles.title}>
-                Room {roomNumber}
-            </Text>
+            {/* Room header with a back button on the left */}
+            <View style={styles.roomHeader}>
+                <Pressable
+                    onPress={() => router.back()}
+                    style={styles.backButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Go back"
+                >
+                    <Ionicons
+                        name="arrow-back"
+                        size={22}
+                        color="#1d2c40"
+                    />
+                </Pressable>
+
+                <Text style={styles.title}>
+                    Room {roomNumber}
+                </Text>
+            </View>
 
             <Text style={styles.subtitle}>
                 Beds
@@ -420,23 +948,77 @@ export default function RoomPage() {
 
                         return (
                             <View>
-                                <View style={styles.bedCard}>
+                                <View                              
+                                    style={[
+                                        styles.bedCard,
+
+                                        // In Move Tenant mode, highlight empty beds that can be selected.
+                                        moveSession &&
+                                            !item.tenant &&
+                                            (item.status === "AVAILABLE" || item.status === "MAINTENANCE") && {
+                                                backgroundColor: "#EFF6FF", // Light blue background
+                                                borderWidth: 1.5,
+                                                borderColor: "#60A5FA", // Blue border
+                                            },
+
+                                        // Give the selected destination a stronger green border.
+                                        moveSession?.destinationBedId === item.bed_id && {
+                                            borderWidth: 2,
+                                            borderColor: "#127e8d",
+                                        },
+                                    ]}
+                                >
 
                                     {/* Bed information */}
-                                    <Pressable
+                                    <Pressable              
                                         onPress={async () => {
 
-                                            // If this bed is already open, close it
+                                            // MOVE TENANT MODE:
+                                            // Handle bed selection instead of opening tenant details.
+                                            if (moveSession) {
+
+                                                // Allow empty AVAILABLE and MAINTENANCE beds only.
+                                                // Occupied and INACTIVE beds cannot be selected.
+                                                if (
+                                                    (item.status !== "AVAILABLE" &&
+                                                        item.status !== "MAINTENANCE") ||
+                                                    item.tenant
+                                                ) {
+                                                    return;
+                                                }
+
+                                                // Tapping the selected destination again deselects it.
+                                                if (moveSession.destinationBedId === item.bed_id) {
+                                                    Haptics.selectionAsync(); // Vibrate when tapping the selected bed again
+                                                    selectMoveDestination(null, null, null);
+                                                    return;
+                                                }
+   
+                                                // Save the selected destination in temporary app state.
+                                                Haptics.selectionAsync(); // Vibrate when selecting a destination bed
+                                                selectMoveDestination(
+                                                    item.bed_id,
+                                                    String(roomNumber),
+                                                    String(item.bed_number)
+                                                );
+
+                                                return;
+                                            }
+
+                                            // NORMAL MODE:
+                                            // Keep your existing bed information behavior unchanged.
+
+                                            // Close the expanded card if this bed is already selected.
                                             if (selectedBedId === item.bed_id) {
                                                 setSelectedBedId(null);
                                                 setTenantDetails(null);
                                                 return;
                                             }
 
-                                            // Select this bed
+                                            // Select this bed.
                                             setSelectedBedId(item.bed_id);
 
-                                            // Available bed → no tenant API call
+                                            // Empty bed: no tenant API request is required.
                                             if (!item.tenant) {
                                                 setTenantDetails(null);
                                                 return;
@@ -445,14 +1027,10 @@ export default function RoomPage() {
                                             try {
                                                 setTenantLoading(true);
 
-                                                const data = await getTenantByBedId(
-                                                    item.bed_id
-                                                );
-
+                                                const data = await getTenantByBedId(item.bed_id);
                                                 setTenantDetails(data);
 
                                             } catch (error) {
-
                                                 console.error(
                                                     "Failed to fetch tenant information:",
                                                     error
@@ -464,6 +1042,7 @@ export default function RoomPage() {
                                                 setTenantLoading(false);
                                             }
                                         }}
+
                                     >
                                         <View style={styles.bedInfoRow}>
 
@@ -570,6 +1149,24 @@ export default function RoomPage() {
                                         </View>
                                     )}
 
+
+                                    
+                                    {/* Vacating icon — shown only when the tenant is marked vacating */}
+                                    {isOccupied && item.tenant?.is_vacating === true && (
+                                        <View
+                                            style={styles.vacatingIconContainer}
+                                            accessibilityLabel="Tenant is vacating"
+                                        >
+                                            <Ionicons
+                                                name="time-outline"
+                                                size={17}
+                                                color="#D97706"
+                                            />
+                                        </View>
+                                    )}
+
+
+
                                     {/* Call button */}
                                     {isOccupied && item.tenant?.phone && (
                                         <Pressable
@@ -592,19 +1189,45 @@ export default function RoomPage() {
                                         }}
                                         style={styles.menuButton}
                                         onPress={() => {
-                                            buttonRef?.measureInWindow(
-                                                (x, y, width, height) => {
+                                            // Preserve the original menu-positioning behavior.
+                                            buttonRef?.measureInWindow((x, y, width, height) => {
+                                                setMenuPosition({
+                                                    x,
+                                                    y,
+                                                    height,
+                                                });
+                                            });
 
+                                            // Clear the previous tenant's status.
+                                            setMenuTenantVacatingStatus(null);
 
-                                                    setMenuPosition({
-                                                        x,
-                                                        y,
-                                                        height,
-                                                    });
-                                                }
-                                            );
-
+                                            // Open the menu immediately, as in your original working code.
                                             setOpenMenuBedId(item.bed_id);
+
+                                            // Fetch the latest vacating status without waiting for the request.
+                                            if (isOccupied) {
+                                                getTenantByBedId(item.bed_id)
+                                                    .then((data) => {
+                                                        setMenuTenantVacatingStatus(
+                                                            data.allocation.is_vacating === true
+                                                        );
+                                                    })
+                                                    .catch((error) => {
+                                                        console.error(
+                                                            "Failed to fetch vacating status:",
+                                                            error
+                                                        );
+
+                                                        setOpenMenuBedId(null);
+
+                                                        Alert.alert(
+                                                            "Unable to load tenant",
+                                                            error instanceof Error
+                                                                ? error.message
+                                                                : "Please try again."
+                                                        );
+                                                    });
+                                            }
                                         }}
                                     >
                                         <Text style={styles.menuDots}>
@@ -613,47 +1236,49 @@ export default function RoomPage() {
                                     </Pressable>
 
 
-                                    {/* Menu */}
+
+                                    {/*All Menus */}
                                     <Modal
                                         transparent={true}
                                         visible={
                                             openMenuBedId === item.bed_id
                                         }
-                                        onRequestClose={() =>
-                                            setOpenMenuBedId(null)
-                                        }
+                                        onRequestClose={() => closeActionMenu()}
                                     >
                                         <View style={styles.modalContainer}>
 
                                             <Pressable
                                                 style={styles.modalOverlay}
-                                                onPress={() =>
-                                                    setOpenMenuBedId(null)
-                                                }
+                                                onPress={() => closeActionMenu()}
                                             />
 
-                                            <View
+                                            
+                                            <Animated.View
                                                 style={[
                                                     styles.actionMenu,
                                                     {
-                                                        left:
-                                                            menuPosition.x - 120,
-                                                        top:
-                                                            menuPosition.y +
-                                                            menuPosition.height,
+                                                        left: menuPosition.x - 120,
+                                                        top: menuPosition.y + menuPosition.height,
+
+                                                        // Fade in and scale up the menu smoothly.
+                                                        opacity: actionMenuAnimation,
+                                                        transform: [
+                                                            { scale: actionMenuAnimation },
+                                                        ],
                                                     },
                                                 ]}
                                             >
 
+
                                                 {isOccupied ? (
                                                     <>
 
-                                                        {/* UPDATE TENANT */}
+                                                        {/* EDIT TENANT */}
                                                         <Pressable
                                                             style={styles.actionItem}
                                                             onPress={() => {
-                                                                setOpenMenuBedId(null);
-
+                                                            // Animate the menu closed before navigating to Edit Tenant.
+                                                            closeActionMenu(() => {
                                                                 router.push({
                                                                     pathname: "/tenant/edit/[bedId]",
                                                                     params: {
@@ -662,115 +1287,345 @@ export default function RoomPage() {
                                                                         roomNumber: roomNumber.toString(),
                                                                     },
                                                                 });
-                                                            }}
+                                                            });
+                                                        }}
                                                         >
-                                                            <Text
-                                                                style={
-                                                                    styles.actionText
-                                                                }
+                                                            <View
+                                                                style={{
+                                                                    flexDirection: "row",
+                                                                    alignItems: "center",
+                                                                    justifyContent: "flex-start",
+                                                                    gap: 10,
+                                                                    width: "100%",
+                                                                }}
                                                             >
-                                                                Update Tenant
-                                                            </Text>
+                                                                {/* Pencil icon for editing tenant details */}
+                                                                <Ionicons
+                                                                    name="create-outline"
+                                                                    size={15}
+                                                                    color="#081536"
+                                                                />
+
+                                                                <Text style={styles.actionText}>
+                                                                    Edit
+                                                                </Text>
+                                                            </View>
                                                         </Pressable>
 
+
+                                                        {/* Divider between Edit and Move */}
+                                                        <View
+                                                            style={{
+                                                                height: StyleSheet.hairlineWidth,
+                                                                backgroundColor: "#E2E8F0",
+                                                            }}
+                                                        />
 
                                                         {/* MOVE TENANT */}
                                                         <Pressable
-                                                            style={styles.actionItem}
+                                                            style={styles.actionItem}                                                                                     
                                                             onPress={() => {
-                                                                setOpenMenuBedId(null);
+                                                                // Stop if this bed does not have a tenant.
+                                                                const tenant = item.tenant;
+                                                                if (!tenant) return;
 
-                                                                console.log(
-                                                                    "Move tenant:",
-                                                                    item.tenant?.tenant_id
-                                                                );
+                                                                // Close the menu smoothly before starting Move Tenant mode.
+                                                                closeActionMenu(() => {
+                                                                    startMoveTenant({
+                                                                        tenantId: tenant.tenant_id,
+                                                                        tenantName: tenant.full_name,
+                                                                        originalBedId: item.bed_id,
+                                                                        buildingId: Number(buildingId),
+                                                                        destinationBedId: null,
+                                                                        destinationRoomNumber: null,
+                                                                        destinationBedNumber: null,
+                                                                    });
+                                                                });
                                                             }}
                                                         >
-                                                            <Text
-                                                                style={
-                                                                    styles.actionText
-                                                                }
+                                                            <View
+                                                                style={{
+                                                                    flexDirection: "row",
+                                                                    alignItems: "center",
+                                                                    justifyContent: "flex-start",
+                                                                    gap: 10,
+                                                                    width: "100%",
+                                                                }}
                                                             >
-                                                                Move Tenant
-                                                            </Text>
+                                                                {/* Arrows icon for moving a tenant to another bed */}
+                                                                <Ionicons
+                                                                    name="swap-horizontal-outline"
+                                                                    size={15}
+                                                                    color="#05133a"
+                                                                />
+
+                                                                <Text style={styles.actionText}>
+                                                                    Move
+                                                                </Text>
+                                                            </View>
                                                         </Pressable>
+
+                                                        {/* Divider between move and vacating */}
+                                                        <View
+                                                            style={{
+                                                                height: StyleSheet.hairlineWidth,
+                                                                backgroundColor: "#E2E8F0",
+                                                            }}
+                                                        />
+                                                        
+                                                        {/* MARK VACATING / CANCEL VACATING BUTTON */}
+                                                        <Pressable
+                                                            // Disable the action until the latest vacating status is loaded.
+                                                            style={[
+                                                                styles.actionItem,
+                                                                menuTenantVacatingStatus === null && { opacity: 0.5 },
+                                                            ]}
+                                                            disabled={
+                                                                menuTenantVacatingStatus === null ||
+                                                                updatingVacating
+                                                            }
+                                                            onPress={async () => {
+                                                                // Close the three-dot menu before opening the confirmation popup.
+                                                                setOpenMenuBedId(null);
+
+                                                                // Make sure this bed has a tenant.
+                                                                if (!item.tenant) {
+                                                                    return;
+                                                                }
+
+                                                                try {
+                                                                    // Fetch the latest tenant status and scheduled rent date.
+                                                                    const data = await getTenantByBedId(item.bed_id);
+
+                                                                    // Read the tenant's currently saved vacating status.
+                                                                    const isVacating =
+                                                                        data.allocation.is_vacating === true;
+
+                                                                    // Store tenant and billing information for the popup.
+                                                                    setVacatingTenant({
+                                                                        tenantId: data.tenant.id,
+                                                                        bedId: item.bed_id,
+                                                                        tenantName: data.tenant.full_name,
+                                                                        isVacating: isVacating,
+                                                                        nextRentDate: data.next_rent_date,
+                                                                    });
+
+                                                                    // Initialize the switch using the tenant's saved status.
+                                                                    vacatingSwitchAnimation.setValue(isVacating ? 1 : 0);
+
+                                                                    // Keep the OK button hidden until the owner changes the switch.
+                                                                    vacatingOkAnimation.setValue(0);
+
+                                                                    // Synchronize the saved status before opening the popup.
+                                                                    pendingVacatingStatusRef.current = isVacating;
+                                                                    setPendingVacatingStatus(isVacating);
+
+                                                                    // Start each new popup session without an unsaved date.
+                                                                    setExpectedCheckoutDate(null);
+                                                                    setShowExpectedCheckoutDatePicker(false);
+                                                                    setCheckoutDateError(false);
+                                                                    checkoutDateShake.setValue(0);
+
+                                                                    // Open the popup without changing the backend.
+                                                                    setVacatingPopupVisible(true);
+                                                                } catch (error) {
+                                                                    // Report errors without changing the saved vacating status.
+                                                                    console.error(
+                                                                        "Failed to load vacating information:",
+                                                                        error
+                                                                    );
+
+                                                                    Alert.alert(
+                                                                        "Unable to load tenant",
+                                                                        error instanceof Error
+                                                                            ? error.message
+                                                                            : "Please try again."
+                                                                    );
+                                                                }
+                                                            }}
+                                                        >
+                                                            <View
+                                                                style={{
+                                                                    flexDirection: "row",
+                                                                    alignItems: "center",
+                                                                    justifyContent: "flex-start",
+                                                                    gap: 10,
+                                                                    width: "100%",
+                                                                }}
+                                                            >
+                                                                {/* Orange clock icon for Mark Vacating / Cancel Vacating. */}
+                                                                <Ionicons
+                                                                    name="time-outline"
+                                                                    size={15}
+                                                                    color="#D97706"
+                                                                />
+
+                                                                {/* Keep the original dynamic loading and status labels. */}
+                                                                <Text style={styles.actionText}>
+                                                                    {menuTenantVacatingStatus === null
+                                                                        ? "Loading..."
+                                                                        : menuTenantVacatingStatus
+                                                                            ? "Cancel Vacating"
+                                                                            : "Vacating"}
+                                                                </Text>
+                                                            </View>
+
+                                                        </Pressable>
+
+
+                                                        {/* Divider between vacating and remove */}
+                                                        <View
+                                                            style={{
+                                                                height: StyleSheet.hairlineWidth,
+                                                                backgroundColor: "#E2E8F0",
+                                                            }}
+                                                        />
 
 
                                                         {/* REMOVE TENANT */}
                                                         <Pressable
                                                             style={styles.actionItem}
                                                             onPress={() => {
-                                                                setOpenMenuBedId(null);
+                                                                // Smoothly close the three-dot menu before showing the popup.
+                                                                closeActionMenu(() => {
+                                                                    // Continue only if this bed has a tenant.
+                                                                    if (item.tenant?.tenant_id) {
+                                                                        // Store the tenant ID for the existing removal flow.
+                                                                        setTenantToRemove(item.tenant.tenant_id);
 
-                                                                if (item.tenant?.tenant_id) {
-                                                                    setTenantToRemove(item.tenant.tenant_id);
-                                                                    setRemoveTenantVisible(true);
-                                                                }
+                                                                        // Show the existing Remove Tenant confirmation popup.
+                                                                        setRemoveTenantVisible(true);
+                                                                    }
+                                                                });
                                                             }}
                                                         >
-                                                            <Text style={styles.actionText}>
-                                                                Remove Tenant
-                                                            </Text>
+                                                            <View
+                                                                style={{
+                                                                    flexDirection: "row",
+                                                                    alignItems: "center",
+                                                                    justifyContent: "flex-start",
+                                                                    gap: 10,
+                                                                    width: "100%",
+                                                                }}
+                                                            >
+                                                                {/* Red icon for the Remove Tenant action. */}
+                                                                <Ionicons
+                                                                    name="trash-outline"
+                                                                    size={15}
+                                                                    color="#DC2626"
+                                                                />
+
+                                                                {/* Keep the existing menu label. */}
+                                                                <Text style={styles.actionText}>
+                                                                    Remove
+                                                                </Text>
+                                                            </View>
                                                         </Pressable>
+
 
                                                     </>
                                                 ) : (
                                                     <>
 
-                                                        {/* Add tenant */}
+                                                        {/* ADD TENANT */}
                                                         <Pressable
                                                             style={styles.actionItem}
                                                             onPress={() => {
-                                                                setOpenMenuBedId(null);
+                                                                // Smoothly close the three-dot menu before opening the form.
+                                                                closeActionMenu(() => {
+                                                                    // Reset the form so previous tenant data is cleared.
+                                                                    resetAddTenantForm();
 
-                                                                resetAddTenantForm();
+                                                                    // Store the selected bed's ID and bed number.
+                                                                    setTenantToAddBedId(item.bed_id);
+                                                                    setTenantToAddBedNumber(item.bed_number);
 
-                                                                setTenantToAddBedId(item.bed_id);
-                                                                setTenantToAddBedNumber(item.bed_number);
-                                                                setAddTenantVisible(true);
+                                                                    // Open the existing Add Tenant form.
+                                                                    setAddTenantVisible(true);
+                                                                });
                                                             }}
                                                         >
-                                                            <Text
-                                                                style={
-                                                                    styles.actionText
-                                                                }
+                                                            <View
+                                                                style={{
+                                                                    flexDirection: "row",
+                                                                    alignItems: "center",
+                                                                    justifyContent: "flex-start",
+                                                                    gap: 10,
+                                                                    width: "100%",
+                                                                }}
                                                             >
-                                                                Add Tenant
-                                                            </Text>
+                                                                {/* Green icon for the Add Tenant action. */}
+                                                                <Ionicons
+                                                                    name="person-add-outline"
+                                                                    size={15}
+                                                                    color="#16A34A"
+                                                                />
+
+                                                                {/* Keep the Add Tenant label. */}
+                                                                <Text style={styles.actionText}>
+                                                                    Add Tenant
+                                                                </Text>
+                                                            </View>
                                                         </Pressable>
+
+                                                        {/* Divider between ADD TENANT and DELETE BED */}
+                                                        <View
+                                                            style={{
+                                                                height: StyleSheet.hairlineWidth,
+                                                                backgroundColor: "#E2E8F0",
+                                                            }}
+                                                        />
 
                                                         {!item.tenant && item.status !== "INACTIVE" && (
                                                             <>
-                                                                {/* Delete bed */}
+                                                                {/* DELETE BED */}
                                                                 <Pressable
                                                                     style={styles.actionItem}
                                                                     onPress={() => {
-                                                                        setOpenMenuBedId(null);
-
-                                                                        Alert.alert(
-                                                                            "Delete Bed",
-                                                                            "Are you sure you want to delete this bed?",
-                                                                            [
-                                                                                {
-                                                                                    text: "Cancel",
-                                                                                    style: "cancel",
-                                                                                },
-                                                                                {
-                                                                                    text: "Delete",
-                                                                                    style: "destructive",
-                                                                                    onPress: () => handleDeleteBed(item.bed_id),
-                                                                                },
-                                                                            ]
-                                                                        );
+                                                                        // Smoothly close the three-dot menu before showing the alert.
+                                                                        closeActionMenu(() => {
+                                                                            // Ask the owner to confirm before deleting the bed.
+                                                                            Alert.alert(
+                                                                                "Delete Bed",
+                                                                                "Are you sure you want to delete this bed?",
+                                                                                [
+                                                                                    {
+                                                                                        // Keep the bed unchanged when Cancel is selected.
+                                                                                        text: "Cancel",
+                                                                                        style: "cancel",
+                                                                                    },
+                                                                                    {
+                                                                                        // Delete the bed only after confirmation.
+                                                                                        text: "Delete",
+                                                                                        style: "destructive",
+                                                                                        onPress: () => handleDeleteBed(item.bed_id),
+                                                                                    },
+                                                                                ]
+                                                                            );
+                                                                        });
                                                                     }}
                                                                 >
-                                                                    <Text
-                                                                        style={
-                                                                            styles.actionText
-                                                                        }
+                                                                    <View
+                                                                        style={{
+                                                                            flexDirection: "row",
+                                                                            alignItems: "center",
+                                                                            justifyContent: "flex-start",
+                                                                            gap: 10,
+                                                                            width: "100%",
+                                                                        }}
                                                                     >
-                                                                        Delete Bed
-                                                                    </Text>
+                                                                        {/* Red trash icon for the Delete Bed action. */}
+                                                                        <Ionicons
+                                                                            name="trash-outline"
+                                                                            size={15}
+                                                                            color="#DC2626"
+                                                                        />
+
+                                                                        {/* Keep the existing menu label. */}
+                                                                        <Text style={styles.actionText}>
+                                                                            Delete Bed
+                                                                        </Text>
+                                                                    </View>
                                                                 </Pressable>
                                                             </>
                                                         )}
@@ -778,7 +1633,7 @@ export default function RoomPage() {
                                                     </>
                                                 )}
 
-                                            </View>
+                                            </Animated.View>
                                         </View>
                                     </Modal>
 
@@ -1223,6 +2078,284 @@ export default function RoomPage() {
 
                 </View>
             </Modal>
+
+
+            
+            
+            {/* Vacating / Cancel Vacating Confirmation Popup */}
+            <Modal
+                visible={vacatingPopupVisible}
+                transparent={true}
+                animationType="fade"
+                statusBarTranslucent={true}
+                onRequestClose={closeVacatingPopup}
+            >
+                <View style={styles.vacatingModalContainer}>
+                    <View style={styles.vacatingModalBox}>
+
+                        {/* Top row: Close button on left, switch on right */}
+                        <View style={styles.vacatingModalTopRow}>
+                            <Pressable
+                                style={styles.vacatingCloseButton}
+                                onPress={closeVacatingPopup}
+                                disabled={updatingVacating}
+                                accessibilityLabel="Close vacating popup"
+                            >
+                                <Ionicons
+                                    name="close"
+                                    size={19}
+                                    color="#475569"
+                                />
+                            </Pressable>
+
+                            {/* Animated ON/OFF switch */}
+                            <Pressable
+                                onPress={handleVacatingSwitchToggle}
+                                disabled={
+                                    updatingVacating ||
+                                    pendingVacatingStatus === null
+                                }
+                                accessibilityRole="switch"
+                                accessibilityState={{
+                                    checked: pendingVacatingStatus === true,
+                                }}
+                                accessibilityLabel="Vacating status"
+                            >
+                                {/* Switch track with smoothly changing color */}
+                                <Animated.View
+                                    style={[
+                                        styles.vacatingSwitchTrack,
+                                        {
+                                            backgroundColor: vacatingSwitchColor,
+                                        },
+                                    ]}
+                                >
+                                    {/* Animated white thumb */}
+                                    <Animated.View
+                                        style={[
+                                            styles.vacatingSwitchThumb,
+                                            {
+                                                left: vacatingThumbLeft,
+                                            },
+                                        ]}
+                                    />
+                                </Animated.View>
+                            </Pressable>
+                        </View>
+
+                        {/* Compact message based on the tenant's saved vacating status */}
+                        {vacatingTenant && pendingVacatingStatus !== null && (
+                            <View style={styles.vacatingMessageContainer}>
+                                {!vacatingTenant.isVacating ? (
+                                    <>
+                                        {/* Main Mark Vacating message */}
+                                        <Text style={styles.vacatingModalMessageStrong}>
+                                            {vacatingTenant.tenantName}
+                                            {"'s rent for "}
+                                            <Text style={styles.vacatingModalDate}>
+                                                {formatVacatingDate(vacatingTenant.nextRentDate)}
+                                            </Text>
+                                            {" won't be added automatically while Vacating is on."}
+                                        </Text>
+
+                                        {/* Supporting message explaining the owner's options */}
+                                        <Text style={styles.vacatingModalMessageHint}>
+                                            You can generate rent manually from the Vacating Tenants page
+                                        </Text>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Text style={styles.vacatingModalMessageStrong}>
+                                            Turn off the switch to cancel Vacating.
+                                        </Text>
+
+                                        <Text style={styles.vacatingModalMessageHint}>
+                                            If the tenant is leaving, you can remove them without cancelling Vacating.
+                                        </Text>
+                                    </>
+                                )}
+                            </View>
+                        )}
+
+                        {/* Expected checkout date and animated OK button */}
+                        <View
+                            style={{
+                                width: "100%",
+                                flexDirection: "row",
+                                alignItems: "center",
+                                justifyContent: vacatingTenant?.isVacating ? "flex-end" : "space-between",
+                                gap: 10,
+                                marginTop: 12,
+                            }}
+                        >
+                            {/* Show calendar only when starting a new Vacating action. */}
+                            {vacatingTenant && !vacatingTenant.isVacating && (
+                            <Animated.View
+                                style={{
+                                    width: "55%",
+                                    maxWidth: 220,
+                                    transform: [
+                                        { translateX: checkoutDateShake },
+                                        { translateY: 4 },
+                                    ],
+                                }}
+                            >
+                                {/* Date selector: available even when the switch is OFF. */}
+                                <Pressable
+                                    style={{
+                                        // Match the OK button's exact height.
+                                        height: 44,
+
+                                        // Let the parent control the width; don't stretch the height.
+                                        flexGrow: 0,
+                                        flexShrink: 1,
+
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        gap: 6,
+
+                                        // Keep only horizontal padding.
+                                        paddingHorizontal: 8,
+                                        paddingVertical: 0,
+
+                                        borderWidth: 1,
+                                        borderColor: "#CBD5E1",
+                                        borderRadius: 12,
+                                        backgroundColor: "#FFFFFF",
+                                    }}
+                                    onPress={() => setShowExpectedCheckoutDatePicker(true)}
+                                    disabled={updatingVacating}
+                                    accessibilityLabel="Select expected checkout date"
+                                >
+                                    <Ionicons
+                                        name="calendar-outline"
+                                        size={19}
+                                        color="#2563EB"
+                                    />
+
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={{ fontSize: 11, color: "#64748B" }}>
+                                            vacating date
+                                        </Text>
+
+                                        <Text
+                                            style={{
+                                                fontSize: 13,
+                                                fontWeight: "600",
+                                                color: expectedCheckoutDate ? "#0F172A" : "#64748B",
+                                            }}
+                                            numberOfLines={1}
+                                        >
+                                            {expectedCheckoutDate
+                                                ? expectedCheckoutDate.toLocaleDateString("en-IN", {
+                                                    day: "2-digit",
+                                                    month: "short",
+                                                    year: "numeric",
+                                                })
+                                                : "Select"}
+                                        </Text>
+                                    </View>
+
+                                    <Ionicons
+                                        name="chevron-down"
+                                        size={16}
+                                        color="#64748B"
+                                    />
+                                </Pressable>
+                            </Animated.View>
+                            )}
+
+                            {/* Keep your existing animated OK button and visibility condition. */}
+                            <Animated.View
+                                style={[
+                                    styles.vacatingOkContainer,
+                                    {
+                                        width: 80,
+                                        opacity: vacatingOkAnimation,
+                                        transform: [
+                                            { translateY: vacatingOkTranslateY },
+                                        ],
+                                    },
+                                ]}
+                            >
+                                {vacatingTenant &&
+                                    pendingVacatingStatus !== null &&
+                                    pendingVacatingStatus !== vacatingTenant.isVacating && (
+                                        <Pressable
+                                            style={[
+                                                styles.vacatingOkButton,
+                                                { width: 80, alignItems: "center" },
+                                                updatingVacating && { opacity: 0.6 },
+                                            ]}
+                                            onPress={handleConfirmVacating}
+                                            disabled={updatingVacating}
+                                        >
+                                            {updatingVacating ? (
+                                                <ActivityIndicator
+                                                    size="small"
+                                                    color="#FFFFFF"
+                                                />
+                                            ) : (
+                                                <Text style={styles.vacatingOkButtonText}>
+                                                    OK
+                                                </Text>
+                                            )}
+                                        </Pressable>
+                                    )}
+                            </Animated.View>
+                        </View>
+
+                        {/* Show the checkout-date validation message inside the popup. */}
+                        {checkoutDateError && (
+                            <Text
+                                style={{
+                                    marginTop: 6,
+                                    color: "#DC2626",
+                                    fontSize: 12,
+                                    textAlign: "left",
+                                }}
+                            >
+                                Please select vacating date.
+                            </Text>
+                        )}
+
+                        {/* Native calendar: dates before today cannot be selected. */}
+                        {showExpectedCheckoutDatePicker &&
+                            vacatingTenant &&
+                            !vacatingTenant.isVacating && (
+                                <DateTimePicker
+                                    value={expectedCheckoutDate ?? new Date()}
+                                    mode="date"
+                                    minimumDate={
+                                        new Date(new Date().setHours(0, 0, 0, 0))
+                                    }
+                                    display={
+                                        Platform.OS === "ios" ? "compact" : "default"
+                                    }
+                                    // Handle the selected date without using deprecated onChange.
+                                    onValueChange={(_event, selectedDate) => {
+                                        if (selectedDate) {
+                                            // Save the date selected by the owner.
+                                            setExpectedCheckoutDate(selectedDate);
+
+                                            // Clear the validation message after selection.
+                                            setCheckoutDateError(false);
+                                        }
+
+                                        // Close the date picker after selection.
+                                        setShowExpectedCheckoutDatePicker(false);
+                                    }}
+                                    // Close the date picker when the owner dismisses it.
+                                    onDismiss={() => {
+                                        setShowExpectedCheckoutDatePicker(false);
+                                    }}
+                                />
+                            )}
+                    </View>
+                </View>
+            </Modal>
+
+
 
 
             {/* Add Tenant Bottom Sheet */}
@@ -1774,6 +2907,19 @@ export default function RoomPage() {
                                         // Clear selected bed
                                         setSelectedBedId(null);
 
+
+                                        // Check whether the newly occupied bed was selected
+                                        // as the Move Tenant destination.
+                                        const currentMoveSession = getMoveTenantSession();
+
+                                        if (
+                                            currentMoveSession?.destinationBedId === tenantToAddBedId
+                                        ) {
+                                            // Clear only the destination; keep Move Tenant active.
+                                            selectMoveDestination(null, null, null);
+                                        }
+
+
                                         // Refresh beds
                                         await fetchBeds();
 
@@ -1828,6 +2974,7 @@ export default function RoomPage() {
                 style={[
                     styles.floatingAddBedButton,
                     addingBed && styles.floatingAddBedButtonDisabled,
+                    { bottom: insets.bottom + 12 },
                 ]}
                 onPress={handleAddBed}
                 disabled={addingBed}
@@ -1852,7 +2999,29 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: "#F8FAFC",
-        padding: 20,
+        // Control each side independently.
+        paddingHorizontal: 20,
+        paddingTop: 10,
+        paddingBottom: 10,
+
+    },
+
+    roomHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        marginBottom: 2,
+    },
+
+    backButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: "#FFFFFF",
+        borderWidth: 1,
+        borderColor: "#E2E8F0",
     },
 
     title: {
@@ -2211,40 +3380,49 @@ const styles = StyleSheet.create({
         fontWeight: "700",
     },
 
+
+    // Main floating menu container.
     actionMenu: {
         position: "absolute",
         backgroundColor: "#FFFFFF",
-        borderRadius: 10,
-        padding: 10,
+        borderRadius: 14,
+        paddingVertical: 6,
+        paddingHorizontal: 0,
         borderWidth: 1,
         borderColor: "#E2E8F0",
-            // Android
+
+        // Android shadow.
         elevation: 8,
 
-        // iOS
-        shadowColor: "#000",
+        // iOS shadow.
+        shadowColor: "#000000",
         shadowOffset: {
             width: 0,
             height: 4,
         },
         shadowOpacity: 0.15,
         shadowRadius: 8,
+
+        overflow: "hidden",
     },
 
+    // Menu option text.
     actionText: {
         fontSize: 14,
         fontWeight: "600",
         color: "#142251",
     },
 
+    // Individual options: no boxes or borders.
     actionItem: {
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        borderWidth: 1,
-        borderColor: "#E2E8F0",
-        borderRadius: 8,
-        marginVertical: 3,
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        backgroundColor: "#FFFFFF",
+        borderWidth: 0,
+        borderRadius: 0,
+        marginVertical: 0,
     },
+
 
     tenantDetailsCard: {
         marginTop: 6,
@@ -2745,5 +3923,251 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: "600",
     },
+
+    
+
+    // Compact floating Move Tenant banner
+    moveTenantBanner: {
+        position: "absolute",
+        top: 6,
+        left: 10,
+        right: 10,
+        zIndex: 1000,
+        elevation: 6,
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#FFFFFF",
+        borderRadius: 25,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderWidth: 1,
+        borderColor: "#d1faf4",
+        shadowColor: "#550e0e",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 4,
+    },
+
+    // Tenant name and destination on the left
+    moveTenantInfo: {
+        flex: 1,
+        minWidth: 0,
+        paddingRight: 8,
+        paddingLeft: 6,
+    },
+
+    moveTenantTitle: {
+        fontSize: 13,
+        fontWeight: "700",
+        color: "#166534",
+    },
+
+    moveTenantSubtitle: {
+        fontSize: 11,
+        color: "#4b5a6e",
+        marginTop: 3,
+    },
+
+    // Buttons stay beside the tenant information
+    moveTenantActions: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+    },
+
+    moveTenantCancelButton: {
+        paddingVertical: 9,
+        paddingHorizontal: 18,
+        borderRadius: 7,
+        backgroundColor: "#F3F4F6",
+    },
+
+    moveTenantCancelText: {
+        color: "#374151",
+        fontSize: 11,
+        fontWeight: "600",
+    },
+
+    moveTenantSaveButton: {
+        paddingVertical: 9,
+        paddingHorizontal: 18,
+        borderRadius: 7,
+        backgroundColor: "#147b89",
+    },
+
+    moveTenantSaveText: {
+        color: "#FFFFFF",
+        fontSize: 11,
+        fontWeight: "700",
+    },
+
+    
+    // ================================================
+    // Vacating / Cancel Vacating Popup
+    // ================================================
+
+    // Dark overlay behind the popup.
+    vacatingModalContainer: {
+        flex: 1,
+        backgroundColor: "rgba(15, 23, 42, 0.48)",
+        justifyContent: "center",
+        alignItems: "center",
+        paddingHorizontal: 10
+    },
+
+
+    // Compact popup card with less empty space.
+    vacatingModalBox: {
+        width: "100%",
+        maxWidth: 380,
+        backgroundColor: "#FFFFFF",
+        borderRadius: 18,
+        paddingHorizontal: 15,
+        paddingTop: 5,
+        paddingBottom: 12,
+        shadowColor: "#000000",
+        shadowOffset: {
+            width: 0,
+            height: 8,
+        },
+        shadowOpacity: 0.16,
+        shadowRadius: 18,
+        elevation: 10,
+    },
+
+    // Top row with a divider underneath the X button and switch.
+    vacatingModalTopRow: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+
+        paddingBottom: 6,
+        marginBottom: 10,
+
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: "#b9cce5",
+    },
+
+    // Compact X button.
+    vacatingCloseButton: {
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        backgroundColor: "#F1F5F9",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+
+    // Compact switch track.
+    vacatingSwitchTrack: {
+        width: 46,
+        height: 26,
+        borderRadius: 13,
+        justifyContent: "center",
+        overflow: "hidden",
+    },
+
+    // White switch thumb.
+    vacatingSwitchThumb: {
+        position: "absolute",
+        top: 3,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: "#FFFFFF",
+        elevation: 2,
+    },
+
+    // Container for the main message and supporting text.
+    vacatingMessageContainer: {
+        marginTop: 2,
+    },
+
+    // Main message: readable, with comfortable line spacing.
+    vacatingModalMessageStrong: {
+        fontSize: 14,
+        lineHeight: 22,
+        letterSpacing: 0.15,
+        color: "#334155",
+        fontWeight: "500",
+    },
+
+    // Emphasize the tenant's name for easier scanning.
+    vacatingTenantName: {
+        fontWeight: "700",
+        color: "#1c253c",
+    },
+
+    // Separate the manual-rent guidance from the main message.
+    vacatingManualHintRow: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        marginTop: 10,
+    },
+
+
+    // Supporting message displayed beneath the main message.
+    vacatingModalMessageHint: {
+        marginTop: 8,
+        fontSize: 12,
+        lineHeight: 18,
+        letterSpacing: 0.15,
+        color: "#64748B",
+        fontWeight: "500",
+    },
+
+    // Main popup message.
+    vacatingModalMessage: {
+        fontSize: 15,
+        lineHeight: 23,
+        color: "#334155",
+        fontWeight: "400",
+    },
+
+    // Make the important rent date stand out.
+    vacatingModalDate: {
+        fontWeight: "800",
+        color: "#040f28",
+    },
+
+
+    // Animated container for the OK button.
+    vacatingOkContainer: {
+        alignSelf: "flex-end",
+        marginTop: 8,
+        height: 44,
+        justifyContent: "center",
+    },
+
+    // Blue confirmation button.
+    vacatingOkButton: {
+        minWidth: 88,
+        height: 44,
+        borderRadius: 12,
+        backgroundColor: "#0a2255",
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 22,
+    },
+
+    // OK button label.
+    vacatingOkButtonText: {
+        color: "#FFFFFF",
+        fontSize: 15,
+        fontWeight: "700",
+    },
+
+    
+    vacatingIconContainer: {
+        // Position the icon immediately left of the existing call button.
+        position: "absolute",
+        bottom: 3,
+        right: 107,
+        width: 30,
+        height: 30,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+  
 
 });

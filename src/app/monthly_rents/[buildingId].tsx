@@ -1,6 +1,6 @@
 import { collectRent, getDueMonthlyRentsByBuilding, } from "@/services/monthlyRent";
 import { FontAwesome } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
@@ -17,12 +17,12 @@ import {
     TextInput,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function DueRentPage() {
 
     const { buildingId, buildingName } = useLocalSearchParams();
-
+    const insets = useSafeAreaInsets();
     const [dueRents, setDueRents] = useState<any[]>([]);
     const [collectModalVisible, setCollectModalVisible] = useState(false);
     const [selectedRent, setSelectedRent] = useState<any>(null);
@@ -37,6 +37,9 @@ export default function DueRentPage() {
     const [collectSuccess, setCollectSuccess] = useState("");
     const [collectLoading, setCollectLoading] = useState(false);
     const [activeTab, setActiveTab] = useState<"newest" | "oldest">("newest");
+    // Animates only the selected tab's background.
+    const tabIndicatorX = useRef(new Animated.Value(0)).current;
+    const [tabContainerWidth, setTabContainerWidth] = useState(0);
     const [searchText, setSearchText] = useState("");
     // 45° shimmer animation for new rent badges
     const shimmerAnimation = useRef(new Animated.Value(0)).current;
@@ -307,14 +310,39 @@ export default function DueRentPage() {
 
 
 
+    // Smoothly moves the selected tab background without animating rent cards.
+    const changeRentTab = (nextTab: "newest" | "oldest") => {
+        if (nextTab === activeTab) return;
+
+        setActiveTab(nextTab);
+
+        const tabWidth = (tabContainerWidth - 6) / 2;
+
+        Animated.spring(tabIndicatorX, {
+            toValue: nextTab === "newest" ? 0 : tabWidth,
+            useNativeDriver: true,
+            speed: 18,
+            bounciness: 0,
+        }).start();
+    };
+
+
+
     // UI
     return (
-        <SafeAreaView edges={["top"]} style={styles.container}>
+        <SafeAreaView edges={["top","bottom"]} style={styles.container}>
 
+            {/* Header: Back button and title on the same line */}
             <View style={styles.pageHeader}>
-                <Text style={styles.pageTitle}>
-                    Rent Collection
-                </Text>
+            <Pressable
+                onPress={() => router.back()}
+                hitSlop={8}
+                style={styles.backButton}
+            >
+                <FontAwesome name="arrow-left" size={18} color="#031529" />
+            </Pressable>
+
+            <Text style={styles.pageTitle}>Rent Collection</Text>
             </View>
 
             {/* Pending rent search */}
@@ -355,14 +383,30 @@ export default function DueRentPage() {
 
 
             {/* Rent age filter */}
-            <View style={styles.tabContainer}>
+            <View
+                style={styles.tabContainer}
+                onLayout={(event) =>
+                    setTabContainerWidth(event.nativeEvent.layout.width)
+                }
+            >
+                {/* Smoothly moving background for the selected tab */}
+                <Animated.View
+                    pointerEvents="none"
+                    style={{
+                        position: "absolute",
+                        left: 3,
+                        top: 3,
+                        bottom: 3,
+                        width: Math.max(0, (tabContainerWidth - 6) / 2),
+                        borderRadius: 8,
+                        backgroundColor: "#FFFFFF",
+                        transform: [{ translateX: tabIndicatorX }],
+                    }}
+                />
 
                 <Pressable
-                    style={[
-                        styles.tab,
-                        activeTab === "newest" && styles.activeTab,
-                    ]}
-                    onPress={() => setActiveTab("newest")}
+                    style={styles.tab}
+                    onPress={() => changeRentTab("newest")}
                 >
                     <Text
                         style={[
@@ -375,11 +419,8 @@ export default function DueRentPage() {
                 </Pressable>
 
                 <Pressable
-                    style={[
-                        styles.tab,
-                        activeTab === "oldest" && styles.activeTab,
-                    ]}
-                    onPress={() => setActiveTab("oldest")}
+                    style={styles.tab}
+                    onPress={() => changeRentTab("oldest")}
                 >
                     <Text
                         style={[
@@ -390,7 +431,6 @@ export default function DueRentPage() {
                         OLDEST
                     </Text>
                 </Pressable>
-
             </View>
 
             <FlatList
@@ -470,15 +510,31 @@ export default function DueRentPage() {
                                 Room {item.room_number}
                             </Text>
 
+                            {/* Show Today/Yesterday for recent dates; otherwise show the formatted date */}
                             <Text style={styles.dueDate}>
-                                {new Date(item.due_date).toLocaleDateString(
-                                    "en-US",
-                                    {
-                                        month: "short",
+                                {(() => {
+                                    const dueDate = new Date(item.due_date);
+                                    const today = new Date();
+
+                                    // Normalize both dates to midnight for accurate comparison.
+                                    dueDate.setHours(0, 0, 0, 0);
+                                    today.setHours(0, 0, 0, 0);
+
+                                    const daysOld = Math.round(
+                                        (today.getTime() - dueDate.getTime()) /
+                                        (1000 * 60 * 60 * 24)
+                                    );
+
+                                    if (daysOld === 0) return "Today";
+                                    if (daysOld === 1) return "Yesterday";
+
+                                    // Format all other dates as 19 Oct, 2026.
+                                    return dueDate.toLocaleDateString("en-GB", {
                                         day: "2-digit",
+                                        month: "short",
                                         year: "numeric",
-                                    }
-                                )}
+                                    }).replace(/(\d{2} \w{3}) (\d{4})/, "$1, $2");
+                                })()}
                             </Text>
 
                         </View>
@@ -577,7 +633,10 @@ export default function DueRentPage() {
                 onRequestClose={() => setCollectModalVisible(false)}
             >
                 <KeyboardAvoidingView
-                    style={styles.modalOverlay}
+                    style={[
+                        styles.modalOverlay,
+                        { paddingBottom: insets.bottom },
+                    ]}
                     behavior={Platform.OS === "ios" ? "padding" : "height"}
                 >
                     <ScrollView
@@ -703,14 +762,27 @@ const styles = StyleSheet.create({
     // =========================
     
     pageHeader: {
-        marginBottom: 16,
+    flexDirection: "row", // Places button and heading side by side
+    alignItems: "center", // Aligns them vertically
+    gap: 12,
+    marginBottom: 16,
+    },
+
+    backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    alignItems: "center",
+    justifyContent: "center",
     },
 
     pageTitle: {
-        fontSize: 28,
-        fontWeight: "800",
-        color: "#031529",
-        letterSpacing: -0.4,
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#031529",
     },
 
     
@@ -724,7 +796,7 @@ const styles = StyleSheet.create({
         height: 50,
         paddingHorizontal: 18,
         marginBottom: 14,
-        borderRadius: 16,
+        borderRadius: 8,
         backgroundColor: "#0F213A",
     },
 
@@ -786,9 +858,6 @@ const styles = StyleSheet.create({
         borderRadius: 8,
     },
 
-    activeTab: {
-        backgroundColor: "#FFFFFF",
-    },
 
     tabText: {
         fontSize: 13,

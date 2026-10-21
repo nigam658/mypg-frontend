@@ -268,6 +268,27 @@ export default function EditTenant() {
 
             setCheckInDateError("");
 
+
+            // Check that the date stays in the original check-in month and year.
+            const originalDate = new Date(
+                `${tenantData.allocation.check_in_date}T12:00:00`
+            );
+
+            if (
+                selectedDate.getMonth() !== originalDate.getMonth() ||
+                selectedDate.getFullYear() !== originalDate.getFullYear()
+            ) {
+                setCheckInDateError(
+                    `Check-in date must remain within ${originalDate.toLocaleString(
+                        "en-US",
+                        { month: "long", year: "numeric" }
+                    )}.`
+                );
+                setSaving(false);
+                return;
+            }
+
+
             const changedFields = buildChangedFields();
 
             if (Object.keys(changedFields).length === 0) {
@@ -384,7 +405,7 @@ export default function EditTenant() {
 
 
     return (
-        <SafeAreaView edges={["top"]} style={styles.safeArea}>
+        <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
                 behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -396,9 +417,24 @@ export default function EditTenant() {
                 >
 
 
-                    <Text style={styles.title}>
-                        Edit Tenant
-                    </Text>
+                    {/* Header with back button and page title */}
+                    <View style={styles.header}>
+                        <Pressable
+                            onPress={() => router.back()}
+                            style={styles.backButton}
+                            hitSlop={10}
+                        >
+                            <Ionicons
+                                name="arrow-back"
+                                size={24}
+                                color="#0F172A"
+                            />
+                        </Pressable>
+
+                        <Text style={styles.title}>
+                            Edit Tenant
+                        </Text>
+                    </View>
 
                     {/* Name + Gender */}
                     <View style={styles.row}>
@@ -693,41 +729,65 @@ export default function EditTenant() {
 
                     </View>
 
-                    {showDatePicker && (
+                    
+                    {/* Date picker: restrict the date to the tenant's original check-in month */}
+                    {showDatePicker && tenantData?.allocation?.check_in_date && (
                         <DateTimePicker
                             value={
-                                checkInDate
-                                    ? new Date(checkInDate)
-                                    : new Date()
+                                new Date(
+                                    `${checkInDate || tenantData.allocation.check_in_date}T12:00:00`
+                                )
                             }
                             mode="date"
                             display="default"
+                            minimumDate={(() => {
+                                const originalDate = new Date(
+                                    `${tenantData.allocation.check_in_date}T12:00:00`
+                                );
+                                return new Date(
+                                    originalDate.getFullYear(),
+                                    originalDate.getMonth(),
+                                    1
+                                );
+                            })()}
+                            maximumDate={(() => {
+                                const originalDate = new Date(
+                                    `${tenantData.allocation.check_in_date}T12:00:00`
+                                );
+                                return new Date(
+                                    originalDate.getFullYear(),
+                                    originalDate.getMonth() + 1,
+                                    0
+                                );
+                            })()}
                             onValueChange={(event, selectedDate) => {
+                            // Close the picker after a date is selected.
+                            setShowDatePicker(false);
 
-                                if (selectedDate) {
+                            if (!selectedDate) {
+                                return;
+                            }
 
-                                    const year = selectedDate.getFullYear();
+                            // Format the selected date as YYYY-MM-DD.
+                            const year = selectedDate.getFullYear();
+                            const month = String(
+                                selectedDate.getMonth() + 1
+                            ).padStart(2, "0");
+                            const day = String(
+                                selectedDate.getDate()
+                            ).padStart(2, "0");
 
-                                    const month = String(
-                                        selectedDate.getMonth() + 1
-                                    ).padStart(2, "0");
+                            setCheckInDate(`${year}-${month}-${day}`);
+                            setCheckInDateError("");
+                        }}
 
-                                    const day = String(
-                                        selectedDate.getDate()
-                                    ).padStart(2, "0");
-
-                                    setCheckInDate(
-                                        `${year}-${month}-${day}`
-                                    );
-
-                                    setCheckInDateError("");
-                                }
-                            }}
-                            onDismiss={() => {
-                                setShowDatePicker(false);
-                            }}
+                        onDismiss={() => {
+                            // Close the picker when dismissed.
+                            setShowDatePicker(false);
+                        }}
                         />
                     )}
+
 
                     {successMessage ? (
                         <Text style={styles.successMessage}>
@@ -775,6 +835,32 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
 
+    // Header containing the back button and page title
+    header: {
+        flexDirection: "row",
+        alignItems: "center",
+        marginBottom: 20,
+    },
+
+    // Back button with a soft background
+    backButton: {
+        width: 40,
+        height: 40,
+        justifyContent: "center",
+        alignItems: "center",
+        marginRight: 10,
+        backgroundColor: "#FFFFFF",
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: "#E2E8F0",
+    },
+
+    // Page title
+    title: {
+        fontSize: 24,
+        fontWeight: "700",
+    },
+
     inputWrapper: {
         position: "relative",
     },
@@ -792,11 +878,6 @@ const styles = StyleSheet.create({
         color: "#DC2626",
     },
 
-    title: {
-        fontSize: 24,
-        fontWeight: "700",
-        marginBottom: 20,
-    },
 
     row: {
         flexDirection: "row",
